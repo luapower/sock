@@ -33,6 +33,11 @@ local function parse_ip(s)
 end
 
 local M = {}
+local bind, check
+
+local function checkz(ret)
+	return check(ret == 0)
+end
 
 if ffi.abi'win' then
 
@@ -193,18 +198,55 @@ local WSADATA = ffi.new'WSADATA'
 C.WSAStartup(0x101, WSADATA)
 assert(WSADATA.wVersion == 0x101)
 
-local wsa_errors = {
-	--
-}
+--error handling
 
-local function check(ret)
-	if ret then return ret end
-	local err = C.WSAGetLastError()
-	return nil, wsa_errors[err] or err
+ffi.cdef[[
+DWORD FormatMessageA(
+	DWORD dwFlags,
+	LPCVOID lpSource,
+	DWORD dwMessageId,
+	DWORD dwLanguageId,
+	LPSTR lpBuffer,
+	DWORD nSize,
+	va_list *Arguments
+);
+]]
+
+local FORMAT_MESSAGE_FROM_SYSTEM = 0x00001000
+
+--return a function which reuses and returns an ever-increasing buffer.
+local function mkbuf(ctype, min_sz)
+	ctype = ffi.typeof('$[?]', ffi.typeof(ctype))
+	min_sz = min_sz or 256
+	assert(min_sz > 0)
+	local buf, bufsz
+	return function(sz)
+		sz = sz or bufsz or min_sz
+		assert(sz > 0)
+		if not bufsz or sz > bufsz then
+			buf, bufsz = ctype(sz), sz
+		end
+		return buf, bufsz
+	end
 end
 
-local function checkz(ret)
-	return check(ret == 0)
+local errbuf = mkbuf'char'
+
+local error_classes = {
+	[10013] = 'access_denied',
+}
+
+function check(ret)
+	if ret then return ret end
+	local err = C.WSAGetLastError()
+	local msg = error_classes[err]
+	if not msg then
+		local buf, bufsz = errbuf(256)
+		local sz = ffi.C.FormatMessageA(
+			FORMAT_MESSAGE_FROM_SYSTEM, nil, err, 0, buf, bufsz, nil)
+		err = sz > 0 and ffi.string(buf, sz):gsub('[\r\n]+$', '') or 'Error '..err
+	end
+	return nil, msg, err
 end
 
 local INVALID_SOCKET = ffi.cast('uintptr_t', -1)
@@ -220,6 +262,8 @@ function M.socket(type)
 	end
 	return check(s ~= INVALID_SOCKET and s)
 end
+
+bind = C.bind
 
 function M.close(s)
 	C.closesocket(s)
@@ -250,7 +294,7 @@ function M.bind(s, ip, port)
 	sa.sin_family = AF_INET
 	sa.sin_addr = ip and parse_ip(ip) or 0
 	sa.sin_port = htons(port)
-	return checkz(C.bind(s, sa, ffi.sizeof(sa)))
+	return checkz(bind(s, sa, ffi.sizeof(sa)))
 end
 
 --hi-level API ---------------------------------------------------------------
@@ -260,10 +304,10 @@ end
 --self-test ------------------------------------------------------------------
 
 if not ... then
-	local sock = M
-	local s = assert(sock.socket'tcp')
-	assert(sock.bind(s, '127.0.0.1', 80))
-	sock.close(s)
+	local net = M
+	local s = assert(net.socket'tcp')
+	assert(net.bind(s, '127.0.0.1', 8090))
+	net.close(s)
 end
 
 return M
