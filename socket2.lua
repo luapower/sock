@@ -205,14 +205,26 @@ typedef struct _QualityOfService {
 	WSABUF        ProviderSpecific;      /* additional provider specific stuff */
 } QOS, *LPQOS;
 
-int WSAConnect(
-	SOCKET         s,
+int WSAIoctl(
+  SOCKET                             s,
+  DWORD                              dwIoControlCode,
+  LPVOID                             lpvInBuffer,
+  DWORD                              cbInBuffer,
+  LPVOID                             lpvOutBuffer,
+  DWORD                              cbOutBuffer,
+  LPDWORD                            lpcbBytesReturned,
+  LPWSAOVERLAPPED                    lpOverlapped,
+  LPWSAOVERLAPPED_COMPLETION_ROUTINE lpCompletionRoutine
+);
+
+typedef BOOL (*LPFN_CONNECTEX) (
+	SOCKET s,
 	const sockaddr_ptr name,
-	int            namelen,
-	LPWSABUF       lpCallerData,
-	LPWSABUF       lpCalleeData,
-	LPQOS          lpSQOS,
-	LPQOS          lpGQOS
+	int namelen,
+	PVOID lpSendBuffer,
+	DWORD dwSendDataLength,
+	LPDWORD lpdwBytesSent,
+	LPOVERLAPPED lpOverlapped
 );
 
 int WSASend(
@@ -269,6 +281,31 @@ void GetAcceptExSockaddrs(
 	LPINT    RemoteSockaddrLength
 );
 ]]
+
+local function ConnectEx(s, ...)
+
+	local IOC_OUT = 0x40000000
+	local IOC_IN  = 0x80000000
+	local IOC_WS2 = 0x08000000
+	local SIO_GET_EXTENSION_FUNCTION_POINTER = bit.bor(IOC_IN, IOC_OUT, 6)
+	local WSAID_CONNECTEX = ffi.new('GUID',
+		0x25a207b9,0xddf3,0x4660,{0x8e,0xe9,0x76,0xe5,0x8c,0x74,0x06,0x3e})
+
+	local cbuf = ffi.new'LPFN_CONNECTEX[1]'
+	local nbuf = ffi.new'DWORD[1]'
+
+	assert(checkz(C.WSAIoctl(
+		s, SIO_GET_EXTENSION_FUNCTION_POINTER,
+		WSAID_CONNECTEX, ffi.sizeof(WSAID_CONNECTEX),
+		cbuf, ffi.sizeof(cbuf),
+		nbuf, nil, nil
+	)))
+	assert(cbuf[0] ~= nil)
+
+	ConnectEx = cbuf[0] --replace this loader.
+
+	return ConnectEx(...)
+end
 
 do
 	local WSADATA = ffi.new'WSADATA'
@@ -330,24 +367,33 @@ end
 
 local INVALID_SOCKET = ffi.cast('uintptr_t', -1)
 
-local IPPROTO_IP   = 0
-local IPPROTO_ICMP = 1
-local IPPROTO_IGMP = 2
-local IPPROTO_TCP  = 6
-local IPPROTO_UDP  = 17
+local IPPROTO_IP   =   0
+local IPPROTO_ICMP =   1
+local IPPROTO_IGMP =   2
+local IPPROTO_TCP  =   6
+local IPPROTO_UDP  =  17
 local IPPROTO_RAW  = 255
+
+local WSA_FLAG_OVERLAPPED             = 0x01
+local WSA_FLAG_MULTIPOINT_C_ROOT      = 0x02
+local WSA_FLAG_MULTIPOINT_C_LEAF      = 0x04
+local WSA_FLAG_MULTIPOINT_D_ROOT      = 0x08
+local WSA_FLAG_MULTIPOINT_D_LEAF      = 0x10
+local WSA_FLAG_ACCESS_SYSTEM_SECURITY = 0x40
+local WSA_FLAG_NO_HANDLE_INHERIT      = 0x80
 
 function M.new(type)
 	local s
+	local flags = WSA_FLAG_OVERLAPPED
 	if type == 'tcp' then
-		s = C.WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, nil, 0, 0)
+		s = C.WSASocketW(AF_INET, SOCK_STREAM, IPPROTO_TCP, nil, 0, flags)
 	elseif type == 'udp' then
-		s = C.WSASocketW(AF_INET, SOCK_DGRAM, IPPROTO_UDP, nil, 0, 0)
+		s = C.WSASocketW(AF_INET, SOCK_DGRAM, IPPROTO_UDP, nil, 0, flags)
 	else
 		assert(false)
 	end
 	if s == INVALID_SOCKET then
-		return check(nil)
+		return check()
 	end
 	local s = {s = s, __index = socket}
 	return setmetatable(s, s)
@@ -376,7 +422,8 @@ end
 
 function socket:connect(ip, port)
 	local sa = sockaddr_in(AF_INET, htons(port), assert(M.ipv4(ip)))
-	local ret = C.WSAConnect(self.s, sa, ffi.sizeof(sa), nil, nil, nil, nil)
+	local o = OVERLAPPED()
+	local ret = ConnectEx(self.s, sa, ffi.sizeof(sa), nil, 0, 0, o)
 	if ret == 0 then
 		return true
 	end
