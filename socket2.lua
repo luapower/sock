@@ -8,19 +8,18 @@ local ffi = require'ffi'
 local bit = require'bit'
 local glue = require'glue'
 
+local win = ffi.abi'win'
+local linux = ffi.os == 'Linux'
+
 local bswap = bit.bswap
 local shr = bit.rshift
 local pass1 = function(x) return x end
 
-local C
-local M = {}
+local C = win and ffi.load'ws2_32' or ffi.C
+local M = {C = C}
 local socket = {}
 
 local check --fw. decl.
-local function checkz(ret) return check(ret == 0) end
-local function checknz(ret) return check(ret ~= 0) end
-
-local INVALID_SOCKET = ffi.cast('uintptr_t', -1)
 
 ffi.cdef[[
 typedef unsigned long u_long;
@@ -28,7 +27,9 @@ typedef void sockaddr;
 typedef uintptr_t SOCKET;
 ]]
 
---hostname lookup ------------------------------------------------------------
+local INVALID_SOCKET = ffi.cast('SOCKET', -1)
+
+--sockaddr construction ------------------------------------------------------
 
 ffi.cdef[[
 struct in_addr {
@@ -51,90 +52,100 @@ struct sockaddr_in6 {
 	struct in6_addr sin6_addr;
 	unsigned long   sin6_scope_id;
 };
-
-uint32_t inet_addr(const char *cp);
-
-typedef struct hostent {
-	char *h_name;
-	char **h_aliases;
-	short h_addrtype;
-	short h_length;
-	char **h_addr_list;
-};
-struct hostent *gethostbyname(const char *name, int af);
 ]]
 
-local htonl = ffi.abi'le' and bswap or pass1
-local htons = ffi.abi'le' and function(x) return shr(bswap(x), 16) end or pass1
-
-local AF_INET  = 2
-local AF_INET6 = 23
-
-local function AF(type)
-	return ((not type or type == 'ipv4') and AF_INET)
-		 or (type == 'ipv6' and AF_INET6)
-		 or error'invalid ip type'
+if win then
+	ffi.cdef[[
+	struct addrinfo {
+		int             ai_flags;
+		int             ai_family;
+		int             ai_socktype;
+		int             ai_protocol;
+		size_t          ai_addrlen;
+		char            *ai_canonname;
+		struct sockaddr *ai_addr;
+		struct addrinfo *ai_next;
+	};
+	]]
+else
+	ffi.cdef[[
+	struct addrinfo {
+		int              ai_flags;
+		int              ai_family;
+		int              ai_socktype;
+		int              ai_protocol;
+		size_t           ai_addrlen;
+		struct sockaddr *ai_addr;
+		char            *ai_canonname;
+		struct addrinfo *ai_next;
+	};
+	]]
 end
 
-local SOCK_STREAM = 1
-local SOCK_DGRAM  = 2
+ffi.cdef[[
+int getaddrinfo(const char *node, const char *service,
+	const struct addrinfo *hints,
+	struct addrinfo **res);
+void freeaddrinfo(struct addrinfo *);
+]]
 
-local function SOCK(type)
-	return (type == 'udp' and SOCK_DGRAM)
-		 or (type == 'tcp' and SOCK_STREAM)
-		 or error'invalid socket type'
-end
-
-local function ip_lookup(host, l3_type)
-	local af = AF(l3_type)
-	local e = C.gethostbyname2(host, af)
-	if e == nil then
-		return nil, 'hostname lookup failed'
-	end
-	assert(e.h_addrtype == af)
-	local ctype =
-		   af == AF_INET  and 'in_addr**'
-		or af == AF_INET6 and 'in6_addr**'
-	return ffi.cast(ctype, e.h_addr_list), af
-end
-
-function M.ips(host, l3_type)
-	local ips, af = ip_lookup(host, l3_type)
-	if not ips then
-		return nil, af
-	end
-	local t = {}
-	local i = 0
-	while ips[i] ~= nil do
-		t[i+1] = af == AF_INET and ips[i].s_addr or ffi.string(ips[i].s6_addr)
-		i = i + 1
-	end
-	return t
-end
-
+local socketargs, addrinfo, freeaddrinfo
 do
-	local sockaddr_in  = ffi.typeof'struct sockaddr_in'
-	local sockaddr_in6 = ffi.typeof'struct sockaddr6_in'
+	local address_types = {
+		inet = 2,
+		inet6 = 23,
+	}
 
-	function M.addr(host, port, l3_type)
-		if type(host) == 'cdata' then
-			return host --pass-through
-		end
-		local port = port and htons(port) or 0
-		local ips, af
-		if not host then
-			af = AF(l3_type)
-		else
-			ips, af = ip_lookup(host, l3_type)
-			if not ips then
-				return nil, af
-			end
-		end
-		local sa_ct = af == AF_INET and sockaddr_in or sockaddr6_in
-		local sa = sa_ct(af, port)
-		sa.sin_addr = ips[0]
-		return sa
+	local socket_types = {
+		tcp = 1,
+		udp = 2,
+	}
+
+	local protocols = {
+		ip = 0,
+		icmp = 1,
+		igmp = 2,
+		tcp = 6,
+		udp = 17,
+		raw = 255,
+	}
+
+	local flag_bits = {
+		passive     = win and 0x00000001 or 0x0001,
+		cannonname  = win and 0x00000002 or 0x0002,
+		numerichost = win and 0x00000004 or 0x0004,
+		numericserv = win and 0x00000008 or 0x0400,
+		all         = win and 0x00000100 or 0x0010,
+		v4mapped    = win and 0x00000800 or 0x0008,
+		addrconfig  = win and 0x00000400 or 0x0020,
+	}
+
+	function socketargs(address_type, socket_type, protocol)
+		local family = address_type and assert(address_types[address_type]) or 0
+		local socktype = socket_type and assert(socket_types[socket_type]) or 0
+		local protocol = protocol and assert(protocols[protocol]) or 0
+		return family, socktype, protocol
 	end
+
+	local hints = ffi.new'struct addrinfo'
+	local addrs = ffi.new'struct addrinfo*[1]'
+
+	function addrinfo(host, port, address_type, socket_type, protocol, flags)
+		if type(host) == 'table' then
+			local t = host
+			host, port, address_type, socket_type, protocol, flags =
+				t.host, t.port, t.address_type, t.socket_type, t.protocol, t.flags
+		end
+		ffi.fill(hints, ffi.sizeof(hints))
+		hints.ai_family, hints.ai_socktype, hints.ai_protocol
+			= socketargs(address_type, socket_type, protocol)
+		hints.ai_flags = glue.bor(flags or 0, flag_bits, true)
+		local ret = C.getaddrinfo(host, port and tostring(port), hints, addrs)
+		if ret ~= 0 then return check() end
+		return addrs[0]
+	end
+
+	freeaddrinfo = C.freeaddrinfo
 end
 
 --binding --------------------------------------------------------------------
@@ -143,24 +154,19 @@ ffi.cdef[[
 int bind(SOCKET s, const sockaddr*, int namelen);
 ]]
 
-function socket:bind(host, port, i3_type)
-	local sa, err = M.addr(host, port, l3_type)
-	if not sa then
-		return false, err
-	end
-	if C.bind(self.s, sa, ffi.sizeof(sa)) ~= 0 then
-		return check(false)
-	end
+function socket:bind(...)
+	local ai, err = addrinfo(nil, 0, ...)
+	if not ai then return false, err end
+	local ok = C.bind(self.s, ai.ai_addr, ai.ai_addrlen) == 0
+	freeaddrinfo(ai)
+	if not ok then return check(false) end
 	self._bound = true
 	return true
 end
 
 --Windows/IOCP ---------------------------------------------------------------
 
-if ffi.os == 'Windows' then
-
-C = ffi.load'ws2_32'
-M.C = C
+if win then
 
 require'winapi.types'
 
@@ -407,12 +413,12 @@ local function ConnectEx(s, ...)
 
 	local cbuf = ffi.new'LPFN_CONNECTEX[1]'
 
-	assert(checkz(C.WSAIoctl(
+	assert(check(C.WSAIoctl(
 		s, SIO_GET_EXTENSION_FUNCTION_POINTER,
 		WSAID_CONNECTEX, ffi.sizeof(WSAID_CONNECTEX),
 		cbuf, ffi.sizeof(cbuf),
 		nbuf, nil, nil
-	)))
+	)) == 0)
 	assert(cbuf[0] ~= nil)
 
 	ConnectEx = cbuf[0] --replace this loader.
@@ -458,29 +464,14 @@ do
 end
 
 do
-	local IPPROTO_IP   =   0
-	--local IPPROTO_ICMP =   1
-	--local IPPROTO_IGMP =   2
-	--local IPPROTO_TCP  =   6
-	local IPPROTO_UDP  =  17
-	--local IPPROTO_RAW  = 255
 
 	local WSA_FLAG_OVERLAPPED             = 0x01
-	--local WSA_FLAG_MULTIPOINT_C_ROOT      = 0x02
-	--local WSA_FLAG_MULTIPOINT_C_LEAF      = 0x04
-	--local WSA_FLAG_MULTIPOINT_D_ROOT      = 0x08
-	--local WSA_FLAG_MULTIPOINT_D_LEAF      = 0x10
-	--local WSA_FLAG_ACCESS_SYSTEM_SECURITY = 0x40
 	--local WSA_FLAG_NO_HANDLE_INHERIT      = 0x80
 
-	function M.new(l4_type, l3_type)
-
-		--l3_type not needed on Windows but checked for cross-platform compat.
-		AF(l3_type)
-
-		local proto = l4_type == 'tcp' and IPPROTO_TCP or IPPROTO_UDP
+	function M.new(...)
+		local family, socktype, protocol = socketargs(...)
 		local flags = WSA_FLAG_OVERLAPPED
-		local s = C.WSASocketW(AF_INET, SOCK(l4_type), proto, nil, 0, flags)
+		local s = C.WSASocketW(family, socktype, protocol, nil, 0, flags)
 		if s == INVALID_SOCKET then
 			return check()
 		end
@@ -563,19 +554,17 @@ do
 		end
 	end
 
-	function socket:connect(host, port, l3_type)
+	function socket:connect(...)
 		if not self._bound then
-			self:bind() --ConnectEx requires it.
+			local ok, err, errcode = self:bind() --ConnectEx requires it.
+			if not ok then return nil, err, errcode end
 		end
-		local sa, err = M.addr(host, port, l3_type)
-		if not sa then
-			return false, err
-		end
+		local ai, err = addrinfo(...)
+		if not ai then return false, err end
 		local o, job = overlapped()
-		local ret = ConnectEx(self.s, sa, ffi.sizeof(sa), nil, 0, nil, o)
-		if ret == 1 then
-			return true
-		end
+		local ok = ConnectEx(self.s, ai.ai_addr, ai.ai_addrlen, nil, 0, nil, o) == 1
+		freeaddrinfo(ai)
+		if ok then return true end
 		return check_pending(job)
 	end
 
@@ -608,7 +597,7 @@ end --Windows
 
 --berkley sockets ------------------------------------------------------------
 
-if ffi.os ~= 'Windows' then
+if not win then
 
 ffi.cdef[[
 SOCKET socket(int af, int type, int protocol);
@@ -681,7 +670,7 @@ end --not Windows
 --all/select -----------------------------------------------------------------
 
 ffi.cdef[[
-int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, const struct timeval *timeout);
+//int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, const struct timeval *timeout);
 ]]
 
 --Linux/epoll ----------------------------------------------------------------
