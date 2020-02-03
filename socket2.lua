@@ -140,6 +140,7 @@ do
 		hints.ai_family, hints.ai_socktype, hints.ai_protocol
 			= socketargs(address_type, socket_type, protocol)
 		hints.ai_flags = glue.bor(flags or 0, flag_bits, true)
+		print(address_type, socket_type, protocol, host, port, hints.ai_family, hints.ai_socktype, hints.ai_protocol, hints.ai_flags)
 		local ret = C.getaddrinfo(host, port and tostring(port), hints, addrs)
 		if ret ~= 0 then return check() end
 		return addrs[0]
