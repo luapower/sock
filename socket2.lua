@@ -120,27 +120,29 @@ do
 		addrconfig  = win and 0x00000400 or 0x0020,
 	}
 
-	function socketargs(address_type, socket_type, protocol)
-		local family = address_type and assert(address_types[address_type]) or 0
-		local socktype = socket_type and assert(socket_types[socket_type]) or 0
-		local protocol = protocol and assert(protocols[protocol]) or 0
-		return family, socktype, protocol
+	function socketargs(socktype, family, protocol)
+		socktype = socket_types[socktype] or socktype or 0
+		family = address_types[family] or family or 0
+		protocol = protocols[protocol] or protocol or 0
+		return socktype, family, protocol
 	end
 
 	local hints = ffi.new'struct addrinfo'
 	local addrs = ffi.new'struct addrinfo*[1]'
 
-	function addrinfo(host, port, address_type, socket_type, protocol, flags)
+	function addrinfo(host, port, socket_type, address_type, protocol, flags)
 		if type(host) == 'table' then
 			local t = host
 			host, port, address_type, socket_type, protocol, flags =
 				t.host, t.port, t.address_type, t.socket_type, t.protocol, t.flags
 		end
 		ffi.fill(hints, ffi.sizeof(hints))
-		hints.ai_family, hints.ai_socktype, hints.ai_protocol
-			= socketargs(address_type, socket_type, protocol)
+		hints.ai_socktype, hints.ai_family, hints.ai_protocol
+			= socketargs(socket_type, address_type, protocol)
 		hints.ai_flags = glue.bor(flags or 0, flag_bits, true)
-		print(address_type, socket_type, protocol, host, port, hints.ai_family, hints.ai_socktype, hints.ai_protocol, hints.ai_flags)
+		if type(port) == 'number' then
+			hints.ai_flags = bit.bor(hints.ai_flags, flag_bits.numericserv)
+		end
 		local ret = C.getaddrinfo(host, port and tostring(port), hints, addrs)
 		if ret ~= 0 then return check() end
 		return addrs[0]
@@ -156,7 +158,7 @@ int bind(SOCKET s, const sockaddr*, int namelen);
 ]]
 
 function socket:bind(...)
-	local ai, err = addrinfo(nil, 0, ...)
+	local ai, err = addrinfo(...)
 	if not ai then return false, err end
 	local ok = C.bind(self.s, ai.ai_addr, ai.ai_addrlen) == 0
 	freeaddrinfo(ai)
@@ -386,47 +388,6 @@ do --init winsock library.
 	assert(WSADATA.wVersion == 0x101)
 end
 
---NOTE: IOCPs can be shared between threads and having a single IOCP for all
---threads is more efficient for the kernel than having one IOCP per thread.
---To share the IOCP with another Lua state, get it with socket.iocp(), then
---copy it over, then set it with socket.iocp(copied_iocp).
-local iocp
-function M.iocp(shared_iocp)
-	if shared_iocp then
-		iocp = shared_iocp
-	elseif not iocp then
-		local INVALID_HANDLE_VALUE = ffi.cast('HANDLE', -1)
-		iocp = ffi.C.CreateIoCompletionPort(INVALID_HANDLE_VALUE, nil, 0, 0)
-		assert(M.iocp ~= nil, 'could not create an IOCP')
-	end
-	return iocp
-end
-
---Binding ConnectEx() because WSAConnect() doesn't do IOCP.
-local function ConnectEx(s, ...)
-
-	local IOC_OUT = 0x40000000
-	local IOC_IN  = 0x80000000
-	local IOC_WS2 = 0x08000000
-	local SIO_GET_EXTENSION_FUNCTION_POINTER = bit.bor(IOC_IN, IOC_OUT, IOC_WS2, 6)
-	local WSAID_CONNECTEX = ffi.new('GUID',
-		0x25a207b9,0xddf3,0x4660,{0x8e,0xe9,0x76,0xe5,0x8c,0x74,0x06,0x3e})
-
-	local cbuf = ffi.new'LPFN_CONNECTEX[1]'
-
-	assert(check(C.WSAIoctl(
-		s, SIO_GET_EXTENSION_FUNCTION_POINTER,
-		WSAID_CONNECTEX, ffi.sizeof(WSAID_CONNECTEX),
-		cbuf, ffi.sizeof(cbuf),
-		nbuf, nil, nil
-	)) == 0)
-	assert(cbuf[0] ~= nil)
-
-	ConnectEx = cbuf[0] --replace this loader.
-
-	return ConnectEx(s, ...)
-end
-
 --error handling
 
 do
@@ -464,22 +425,73 @@ do
 	end
 end
 
+--NOTE: IOCPs can be shared between threads and having a single IOCP for all
+--threads is more efficient for the kernel than having one IOCP per thread.
+--To share the IOCP with another Lua state, get it with socket.iocp(), then
+--copy it over, then set it with socket.iocp(copied_iocp).
+local iocp
+function M.iocp(shared_iocp)
+	if shared_iocp then
+		iocp = shared_iocp
+	elseif not iocp then
+		local INVALID_HANDLE_VALUE = ffi.cast('HANDLE', -1)
+		iocp = ffi.C.CreateIoCompletionPort(INVALID_HANDLE_VALUE, nil, 0, 0)
+		assert(check(M.iocp ~= nil))
+	end
+	return iocp
+end
+
+--Binding ConnectEx() because WSAConnect() doesn't do IOCP.
+local function ConnectEx(s, ...)
+
+	local IOC_OUT = 0x40000000
+	local IOC_IN  = 0x80000000
+	local IOC_WS2 = 0x08000000
+	local SIO_GET_EXTENSION_FUNCTION_POINTER = bit.bor(IOC_IN, IOC_OUT, IOC_WS2, 6)
+	local WSAID_CONNECTEX = ffi.new('GUID',
+		0x25a207b9,0xddf3,0x4660,{0x8e,0xe9,0x76,0xe5,0x8c,0x74,0x06,0x3e})
+
+	local cbuf = ffi.new'LPFN_CONNECTEX[1]'
+
+	assert(check(C.WSAIoctl(
+		s, SIO_GET_EXTENSION_FUNCTION_POINTER,
+		WSAID_CONNECTEX, ffi.sizeof(WSAID_CONNECTEX),
+		cbuf, ffi.sizeof(cbuf),
+		nbuf, nil, nil
+	)) == 0)
+	assert(cbuf[0] ~= nil)
+
+	ConnectEx = cbuf[0] --replace this loader.
+
+	return ConnectEx(s, ...)
+end
+
 do
 
 	local WSA_FLAG_OVERLAPPED             = 0x01
 	--local WSA_FLAG_NO_HANDLE_INHERIT      = 0x80
 
-	function M.new(...)
-		local family, socktype, protocol = socketargs(...)
+	function M.new(socktype, family, protocol)
+
+		family = family or 'inet'
+		local socktype, family, protocol = socketargs(socktype, family, protocol)
+		assert(family ~= 0, 'address family required')
+		assert(socktype ~= 0, 'socket type required')
 		local flags = WSA_FLAG_OVERLAPPED
+
 		local s = C.WSASocketW(family, socktype, protocol, nil, 0, flags)
+
 		if s == INVALID_SOCKET then
 			return check()
 		end
 
-		assert(ffi.C.CreateIoCompletionPort(ffi.cast('HANDLE', s), M.iocp(), 0, 0) == M.iocp())
+		local iocp = M.iocp()
+		if ffi.C.CreateIoCompletionPort(ffi.cast('HANDLE', s), iocp, 0, 0) ~= iocp then
+			return check()
+		end
 
-		local s = {s = s, __index = socket}
+		local s = {s = s, __index = socket,
+			_socktype = socktype, _family = family, _protocol = protocol}
 		return setmetatable(s, s)
 	end
 end
@@ -557,7 +569,9 @@ do
 
 	function socket:connect(...)
 		if not self._bound then
-			local ok, err, errcode = self:bind() --ConnectEx requires it.
+			--ConnectEx requires binding first.
+			local ok, err, errcode = self:bind(nil, 0,
+				self._socktype, self._family, self._protocol)
 			if not ok then return nil, err, errcode end
 		end
 		local ai, err = addrinfo(...)
