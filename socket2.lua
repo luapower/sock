@@ -131,9 +131,9 @@ do
 		addrconfig  = Windows and 0x00000400 or 0x0020,
 	}
 
-	function socketargs(socktype, family, protocol)
-		local st = socktype and assert(socket_types[socktype]) or 0
-		local af = family and assert(address_families[family]) or 0
+	function socketargs(socket_type, address_family, protocol)
+		local st = socket_type and assert(socket_types[socket_type]) or 0
+		local af = address_family and assert(address_families[address_family]) or 0
 		local prot = protocol and assert(protocols[protocol]) or 0
 		return st, af, prot
 	end
@@ -821,6 +821,7 @@ end
 
 local function wrap_method(skt, method)
 	local inherited = skt[method]
+	if not inherited then return end
 	skt[method] = function(...)
 		local ret, job = inherited(...)
 		if not ret then return ret, job end

@@ -38,7 +38,7 @@ local function test_http()
 
 	socket.loop.newthread(function()
 
-		local s = assert(socket.new('tcp'))
+		local s = assert(socket.tcp())
 		--s:setblocking(true)
 		--assert(s:bind('127.0.0.1', 800))
 		print('connect', s:connect('127.0.0.1', 80))
