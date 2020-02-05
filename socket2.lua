@@ -6,16 +6,14 @@ if not ... then require'socket2_test'; return end
 
 local ffi = require'ffi'
 local bit = require'bit'
+
 local glue = require'glue'
+local coro = require'coro'
 
-local win = ffi.abi'win'
-local linux = ffi.os == 'Linux'
+local Windows = ffi.abi'win'
+local Linux = ffi.os == 'Linux'
 
-local bswap = bit.bswap
-local shr = bit.rshift
-local pass1 = function(x) return x end
-
-local C = win and ffi.load'ws2_32' or ffi.C
+local C = Windows and ffi.load'ws2_32' or ffi.C
 local M = {C = C}
 local socket = {}
 
@@ -23,8 +21,8 @@ local check --fw. decl.
 
 ffi.cdef[[
 typedef unsigned long u_long;
-typedef void sockaddr;
 typedef uintptr_t SOCKET;
+typedef struct sockaddr sockaddr;
 ]]
 
 local INVALID_SOCKET = ffi.cast('SOCKET', -1)
@@ -54,7 +52,7 @@ struct sockaddr_in6 {
 };
 ]]
 
-if win then
+if Windows then
 	ffi.cdef[[
 	struct addrinfo {
 		int             ai_flags;
@@ -89,7 +87,7 @@ int getaddrinfo(const char *node, const char *service,
 void freeaddrinfo(struct addrinfo *);
 ]]
 
-local socketargs, addrinfo, freeaddrinfo
+local socketargs, addrinfo
 do
 	local address_types = {
 		inet = 2,
@@ -111,27 +109,30 @@ do
 	}
 
 	local flag_bits = {
-		passive     = win and 0x00000001 or 0x0001,
-		cannonname  = win and 0x00000002 or 0x0002,
-		numerichost = win and 0x00000004 or 0x0004,
-		numericserv = win and 0x00000008 or 0x0400,
-		all         = win and 0x00000100 or 0x0010,
-		v4mapped    = win and 0x00000800 or 0x0008,
-		addrconfig  = win and 0x00000400 or 0x0020,
+		passive     = Windows and 0x00000001 or 0x0001,
+		cannonname  = Windows and 0x00000002 or 0x0002,
+		numerichost = Windows and 0x00000004 or 0x0004,
+		numericserv = Windows and 0x00000008 or 0x0400,
+		all         = Windows and 0x00000100 or 0x0010,
+		v4mapped    = Windows and 0x00000800 or 0x0008,
+		addrconfig  = Windows and 0x00000400 or 0x0020,
 	}
 
 	function socketargs(socktype, family, protocol)
-		socktype = socket_types[socktype] or socktype or 0
-		family = address_types[family] or family or 0
-		protocol = protocols[protocol] or protocol or 0
-		return socktype, family, protocol
+		local st = socktype and assert(socket_types[socktype]) or 0
+		local af = family and assert(address_types[family]) or 0
+		local prot = protocol and assert(protocols[protocol]) or 0
+		return st, af, prot
 	end
 
 	local hints = ffi.new'struct addrinfo'
 	local addrs = ffi.new'struct addrinfo*[1]'
+	local addrinfo_ct = ffi.typeof'struct addrinfo'
 
-	function addrinfo(host, port, socket_type, address_type, protocol, flags)
-		if type(host) == 'table' then
+	function M.addr(host, port, socket_type, address_type, protocol, flags)
+		if ffi.istype(addrinfo_ct, host) then
+			return host, true --pass-through
+		elseif type(host) == 'table' then
 			local t = host
 			host, port, address_type, socket_type, protocol, flags =
 				t.host, t.port, t.address_type, t.socket_type, t.protocol, t.flags
@@ -140,15 +141,20 @@ do
 		hints.ai_socktype, hints.ai_family, hints.ai_protocol
 			= socketargs(socket_type, address_type, protocol)
 		hints.ai_flags = glue.bor(flags or 0, flag_bits, true)
-		if type(port) == 'number' then
-			hints.ai_flags = bit.bor(hints.ai_flags, flag_bits.numericserv)
-		end
 		local ret = C.getaddrinfo(host, port and tostring(port), hints, addrs)
 		if ret ~= 0 then return check() end
-		return addrs[0]
+		return ffi.gc(addrs[0], C.freeaddrinfo)
 	end
 
-	freeaddrinfo = C.freeaddrinfo
+	local addrinfo = {}
+
+	function addrinfo:free()
+		ffi.gc(self, nil)
+		C.freeaddrinfo(self)
+	end
+
+	ffi.metatype(addrinfo_ct, {__index = addrinfo})
+
 end
 
 --binding --------------------------------------------------------------------
@@ -158,10 +164,10 @@ int bind(SOCKET s, const sockaddr*, int namelen);
 ]]
 
 function socket:bind(...)
-	local ai, err = addrinfo(...)
+	local ai, err = M.addr(...)
 	if not ai then return false, err end
 	local ok = C.bind(self.s, ai.ai_addr, ai.ai_addrlen) == 0
-	freeaddrinfo(ai)
+	if not err then ai:free() end
 	if not ok then return check(false) end
 	self._bound = true
 	return true
@@ -169,7 +175,7 @@ end
 
 --Windows/IOCP ---------------------------------------------------------------
 
-if win then
+if Windows then
 
 require'winapi.types'
 
@@ -178,24 +184,11 @@ ffi.cdef[[
 // IOCP ----------------------------------------------------------------------
 
 typedef struct _OVERLAPPED {
-  ULONG_PTR Internal;
-  ULONG_PTR InternalHigh;
-  union {
-    struct {
-      DWORD Offset;
-      DWORD OffsetHigh;
-    } DUMMYSTRUCTNAME;
-    PVOID Pointer;
-  } DUMMYUNIONNAME;
-  HANDLE    hEvent;
+	ULONG_PTR Internal;
+	ULONG_PTR InternalHigh;
+	PVOID Pointer;
+	HANDLE    hEvent;
 } OVERLAPPED, *LPOVERLAPPED;
-
-typedef struct _OVERLAPPED_ENTRY {
-  ULONG_PTR    lpCompletionKey;
-  LPOVERLAPPED lpOverlapped;
-  ULONG_PTR    Internal;
-  DWORD        dwNumberOfBytesTransferred;
-} OVERLAPPED_ENTRY, *LPOVERLAPPED_ENTRY;
 
 HANDLE CreateIoCompletionPort(
 	HANDLE    FileHandle,
@@ -212,47 +205,12 @@ BOOL GetQueuedCompletionStatus(
   DWORD        dwMilliseconds
 );
 
-BOOL GetQueuedCompletionStatusEx(
-	HANDLE             CompletionPort,
-	LPOVERLAPPED_ENTRY lpCompletionPortEntries,
-	ULONG              ulCount,
-	PULONG             ulNumEntriesRemoved,
-	DWORD              dwMilliseconds,
-	BOOL               fAlertable
-);
-
 // Sockets -------------------------------------------------------------------
 
 typedef HANDLE WSAEVENT;
 typedef unsigned int GROUP;
 
-typedef struct _WSAPROTOCOLCHAIN {
-  int   ChainLen;
-  DWORD ChainEntries[7];
-} WSAPROTOCOLCHAIN, *LPWSAPROTOCOLCHAIN;
-
-typedef struct _WSAPROTOCOL_INFOW {
-  DWORD            dwServiceFlags1;
-  DWORD            dwServiceFlags2;
-  DWORD            dwServiceFlags3;
-  DWORD            dwServiceFlags4;
-  DWORD            dwProviderFlags;
-  GUID             ProviderId;
-  DWORD            dwCatalogEntryId;
-  WSAPROTOCOLCHAIN ProtocolChain;
-  int              iVersion;
-  int              iAddressFamily;
-  int              iMaxSockAddr;
-  int              iMinSockAddr;
-  int              iSocketType;
-  int              iProtocol;
-  int              iProtocolMaxOffset;
-  int              iNetworkByteOrder;
-  int              iSecurityScheme;
-  DWORD            dwMessageSize;
-  DWORD            dwProviderReserved;
-  WCHAR            szProtocol[8];
-} WSAPROTOCOL_INFOW, *LPWSAPROTOCOL_INFOW;
+typedef struct _WSAPROTOCOL_INFOW WSAPROTOCOL_INFOW, *LPWSAPROTOCOL_INFOW;
 
 SOCKET WSASocketW(
   int                 af,
@@ -283,25 +241,6 @@ typedef struct _WSABUF {
   ULONG len;
   CHAR  *buf;
 } WSABUF, *LPWSABUF;
-
-typedef ULONG SERVICETYPE;
-
-typedef struct _flowspec {
-	ULONG       TokenRate;              /* In Bytes/sec */
-	ULONG       TokenBucketSize;        /* In Bytes */
-	ULONG       PeakBandwidth;          /* In Bytes/sec */
-	ULONG       Latency;                /* In microseconds */
-	ULONG       DelayVariation;         /* In microseconds */
-	SERVICETYPE ServiceType;
-	ULONG       MaxSduSize;             /* In Bytes */
-	ULONG       MinimumPolicedSize;     /* In Bytes */
-} FLOWSPEC, *LPFLOWSPEC;
-
-typedef struct _QualityOfService {
-	FLOWSPEC      SendingFlowspec;       /* the flow spec for data sending */
-	FLOWSPEC      ReceivingFlowspec;     /* the flow spec for data receiving */
-	WSABUF        ProviderSpecific;      /* additional provider specific stuff */
-} QOS, *LPQOS;
 
 int WSAIoctl(
   SOCKET        s,
@@ -343,6 +282,18 @@ int WSARecv(
 	LPDWORD      lpFlags,
 	LPOVERLAPPED lpOverlapped,
 	void*        lpCompletionRoutine
+);
+
+int WSASendTo(
+	SOCKET          s,
+	LPWSABUF        lpBuffers,
+	DWORD           dwBufferCount,
+	LPDWORD         lpNumberOfBytesSent,
+	DWORD           dwFlags,
+	const sockaddr  *lpTo,
+	int             iTolen,
+	LPOVERLAPPED    lpOverlapped,
+	void*           lpCompletionRoutine
 );
 
 int WSARecvFrom(
@@ -466,6 +417,8 @@ local function ConnectEx(s, ...)
 	return ConnectEx(s, ...)
 end
 
+local methods = {tcp = {}, udp = {}}
+
 do
 
 	local WSA_FLAG_OVERLAPPED             = 0x01
@@ -474,12 +427,12 @@ do
 	function M.new(socktype, family, protocol)
 
 		family = family or 'inet'
-		local socktype, family, protocol = socketargs(socktype, family, protocol)
-		assert(family ~= 0, 'address family required')
-		assert(socktype ~= 0, 'socket type required')
+		local st, af, prot = socketargs(socktype, family, protocol)
+		assert(af ~= 0, 'address family required')
+		assert(st ~= 0, 'socket type required')
 		local flags = WSA_FLAG_OVERLAPPED
 
-		local s = C.WSASocketW(family, socktype, protocol, nil, 0, flags)
+		local s = C.WSASocketW(af, st, prot, nil, 0, flags)
 
 		if s == INVALID_SOCKET then
 			return check()
@@ -491,7 +444,14 @@ do
 		end
 
 		local s = {s = s, __index = socket,
-			_socktype = socktype, _family = family, _protocol = protocol}
+			type = socktype,
+			family = family,
+			protocol = protocol,
+			_st = socktype,
+			_af = family,
+			_prot = protocol,
+		}
+		glue.update(s, methods[socktype])
 		return setmetatable(s, s)
 	end
 end
@@ -512,32 +472,41 @@ function socket:close()
 end
 
 local overlapped, free_overlapped
+local OVERLAPPED = ffi.typeof'OVERLAPPED'
+local LPOVERLAPPED = ffi.typeof'LPOVERLAPPED'
+
 do
-	local list_dynarray  = glue.dynarray'OVERLAPPED[?]'
-	local freed_dynarray = glue.dynarray'int[?]'
-	local list
-	local freed
-	local list_top  = -1
-	local freed_top = -1
-	local jobs = {}
+	local jobs = {} --{job1, ...}
+	local freed = {} --{job_index1, ...}
+	local push = table.insert
+	local pop = table.remove
+	local overlapped_ct = ffi.typeof[[
+		struct {
+			OVERLAPPED overlapped;
+			int job_index;
+		}
+	]]
+	local overlapped_ptr_ct = ffi.typeof('$*', overlapped_ct)
 	function overlapped()
-		if freed_top >= 0 then
-			local i = freed[freed_top]
-			freed_top = freed_top - 1
-			return list + i, jobs[i + 1]
+		if #freed > 0 then
+			local job_index = pop(freed)
+			local job = jobs[job_index]
+			local o = ffi.cast(LPOVERLAPPED, job._overlapped)
+			ffi.fill(o, ffi.sizeof(OVERLAPPED))
+			return o, job
 		else
-			list_top = list_top + 1
-			list = list_dynarray(list_top + 1)
-			local job = {}; jobs[list_top + 1] = job
-			return list + list_top, job
+			local job = {}
+			local o = overlapped_ct()
+			job._overlapped = o
+			push(jobs, job)
+			o.job_index = #jobs
+			return ffi.cast(LPOVERLAPPED, o), job
 		end
 	end
 	function free_overlapped(o)
-		local i = o - list
-		freed_top = freed_top + 1
-		freed = freed_dynarray(freed_top + 1)
-		freed[freed_top] = i
-		return jobs[i]
+		local o = ffi.cast(overlapped_ptr_ct, o)
+		push(freed, o.job_index)
+		return jobs[o.job_index]
 	end
 end
 
@@ -546,6 +515,7 @@ do
 	local obuf = ffi.new'LPOVERLAPPED[1]'
 
 	function M.poll(timeout)
+		timeout = glue.clamp(timeout or 1/0, 0, 0xFFFFFFFF)
 		local ok = ffi.C.GetQueuedCompletionStatus(
 			iocp, nbuf, keybuf, obuf, timeout * 1000) ~= 0
 		if not ok then return check() end
@@ -558,61 +528,77 @@ end
 do
 	local WSA_IO_PENDING = 997
 
-	local function check_pending(job)
-		local err = C.WSAGetLastError()
-		if err == WSA_IO_PENDING then
-			return true, job
-		else
+	local function check_pending(ok, job)
+		if not ok and C.WSAGetLastError() ~= WSA_IO_PENDING then
 			return check(false)
 		end
+		return true, job
 	end
 
 	function socket:connect(...)
 		if not self._bound then
 			--ConnectEx requires binding first.
-			local ok, err, errcode = self:bind(nil, 0,
-				self._socktype, self._family, self._protocol)
+			local ok, err, errcode = self:bind(nil, 0, self._st, self._af, self._prot)
 			if not ok then return nil, err, errcode end
 		end
-		local ai, err = addrinfo(...)
+		local ai, err = M.addr(...)
 		if not ai then return false, err end
 		local o, job = overlapped()
 		local ok = ConnectEx(self.s, ai.ai_addr, ai.ai_addrlen, nil, 0, nil, o) == 1
-		freeaddrinfo(ai)
-		if ok then return true end
-		return check_pending(job)
+		if not err then ai:free() end
+		return check_pending(ok, job)
 	end
 
 	local wsabuf = ffi.new'WSABUF'
 
 	local pchar_t = ffi.typeof'char*'
-	function socket:send(buf, len)
+	local flagsbuf = ffi.new'DWORD[1]'
+
+	function methods.tcp:send(buf, len)
 		wsabuf.buf = type(buf) == 'string' and ffi.cast(pchar_t, buf) or buf
 		wsabuf.len = len or #buf
 		local o, job = overlapped()
-		if C.WSASend(self.s, wsabuf, 1, nbuf, 0, o, nil) == 0 then
-			return nbuf[0]
-		end
-		return check_pending(job)
+		local ok = C.WSASend(self.s, wsabuf, 1, nbuf, 0, o, nil) == 0
+		return check_pending(ok, job)
 	end
 
-	local flagsbuf = ffi.new'DWORD[1]'
-	function socket:recv(buf, len)
+	function methods.udp:send(buf, len, ...)
+		local ai, err = M.addr(...)
+		wsabuf.buf = type(buf) == 'string' and ffi.cast(pchar_t, buf) or buf
+		wsabuf.len = len or #buf
+		local o, job = overlapped()
+		local ok = C.WSASendTo(self.s, wsabuf, 1, nbuf, 0, ai.ai_addr, ai.ai_addrlen, o, nil) == 0
+		if not err then ai:free() end
+		return check_pending(ok, job)
+	end
+
+	function methods.tcp:recv(buf, len)
 		wsabuf.buf = buf
 		wsabuf.len = len
 		local o, job = overlapped()
-		if C.WSARecv(self.s, wsabuf, 1, nbuf, flagsbuf, o, nil) == 0 then
-			return nbuf[0]
-		end
-		return check_pending(job)
+		flagsbuf[0] = 0
+		local ok = C.WSARecv(self.s, wsabuf, 1, nbuf, flagsbuf, o, nil) == 0
+		return check_pending(ok, job)
 	end
+
+	function methods.udp:recv(buf, len, ...)
+		local ai, err = M.addr(...)
+		wsabuf.buf = buf
+		wsabuf.len = len
+		local o, job = overlapped()
+		flagsbuf[0] = 0
+		local ok = C.WSARecvFrom(self.s, wsabuf, 1, nbuf, flagsbuf, ai.ai_addr, ai.ai_addrlen, o, nil) == 0
+		if not err then ai:free() end
+		return check_pending(ok, job)
+	end
+
 end
 
 end --Windows
 
 --berkley sockets ------------------------------------------------------------
 
-if not win then
+if not Windows then
 
 ffi.cdef[[
 SOCKET socket(int af, int type, int protocol);
@@ -690,7 +676,7 @@ ffi.cdef[[
 
 --Linux/epoll ----------------------------------------------------------------
 
-if ffi.os == 'Linux' then
+if linux then
 
 ffi.cdef[[
 enum EPOLL_EVENTS {
@@ -732,6 +718,76 @@ local EPOLL_CTL_ADD = 1
 local EPOLL_CTL_DEL = 2
 local EPOLL_CTL_MOD = 3
 
+end
+
+--coroutine loop -------------------------------------------------------------
+
+local loop = {}
+M.loop = loop
+
+function loop.resume(thread, ...)
+	local loop_thread = loop.thread
+	--change loop.thread temporarily so that we get back here
+	--on the first call to suspend().
+	loop.thread = coro.running()
+	coro.transfer(thread, ...)
+	loop.thread = loop_thread
+end
+
+--create a thread set up to transfer control to the loop thread on finish,
+--and run it. return it while suspended in the first async socket call.
+--step() will resume it afterwards.
+function newthread(handler, ...)
+	--wrap handler so that it terminates in current loop.thread.
+	local handler = function(...)
+		handler(...)
+		coro.transfer(loop.thread)
+	end
+	local thread = coro.create(handler)
+	loop.resume(thread, ...)
+	return thread
+end
+function loop.newthread(handler, ...)
+	--wrap handler to get full traceback from coroutine.
+	local handler = function(...)
+		local ok, err = glue.pcall(handler, ...)
+		if ok then return ok end
+		error(err, 2)
+	end
+	return newthread(handler, ...)
+end
+
+local function wrap(skt, method)
+	local inherited = skt[method]
+	skt[method] = function(...)
+		local ret, job = inherited(...)
+		if not ret then return ret, job end
+		job.thread = coro.running()
+		return coro.transfer(loop.thread)
+	end
+end
+function loop.wrap(skt)
+	wrap(skt, 'connect')
+	wrap(skt, 'send'   )
+	wrap(skt, 'recv'   )
+end
+
+function loop.step(timeout)
+	local job, n = M.poll(timeout)
+	if not job then return nil, n end
+	loop.thread = coro.running()
+	coro.resume(job.thread, n)
+	return true
+end
+
+local stop = false
+function loop.stop() stop = true end
+function loop.start(timeout)
+	repeat
+		local ok, err = loop.step(timeout)
+		if not ok then return nil, err end
+	until stop
+	return true
 end
 
 return M
