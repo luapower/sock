@@ -6,7 +6,7 @@ local ffi = require'ffi'
 local function test_addr()
 	local function dump(...)
 		for ai in assert(socket.addr(...)):addresses() do
-			print(ai:address(), ai:socket_type(), ai:address_type(), ai:protocol(), ai:name())
+			print(ai:address(), ai:socket_type(), ai:address_family(), ai:protocol(), ai:name())
 		end
 	end
 	dump('1234:2345:3456:4567:5678:6789:7890:8901', 0, 'tcp', 'inet6')
@@ -39,7 +39,6 @@ local function test_http()
 	socket.loop.newthread(function()
 
 		local s = assert(socket.new('tcp'))
-		socket.loop.wrap(s)
 		--s:setblocking(true)
 		--assert(s:bind('127.0.0.1', 800))
 		print('connect', s:connect('127.0.0.1', 80))
@@ -51,7 +50,7 @@ local function test_http()
 
 	end)
 
-	print(socket.loop.start(1))
+	print(socket.start(1))
 
 end
 

@@ -27,6 +27,8 @@ typedef struct sockaddr sockaddr;
 
 local INVALID_SOCKET = ffi.cast('SOCKET', -1)
 
+local wrap_socket --fw. decl.
+
 --sockaddr construction ------------------------------------------------------
 
 ffi.cdef[[
@@ -95,13 +97,13 @@ int getaddrinfo(const char *node, const char *service,
 void freeaddrinfo(struct addrinfo *);
 ]]
 
-local socketargs, addrinfo
+local socketargs
 do
-	local address_types = {
+	local address_families = {
 		inet = 2,
 		inet6 = 23,
 	}
-	local address_type_map = glue.index(address_types)
+	local address_family_map = glue.index(address_families)
 
 	local socket_types = {
 		tcp = 1,
@@ -131,7 +133,7 @@ do
 
 	function socketargs(socktype, family, protocol)
 		local st = socktype and assert(socket_types[socktype]) or 0
-		local af = family and assert(address_types[family]) or 0
+		local af = family and assert(address_families[family]) or 0
 		local prot = protocol and assert(protocols[protocol]) or 0
 		return st, af, prot
 	end
@@ -140,17 +142,17 @@ do
 	local addrs = ffi.new'struct addrinfo*[1]'
 	local addrinfo_ct = ffi.typeof'struct addrinfo'
 
-	function M.addr(host, port, socket_type, address_type, protocol, flags)
+	function M.addr(host, port, socket_type, address_family, protocol, flags)
 		if ffi.istype(addrinfo_ct, host) then
 			return host, true --pass-through
 		elseif type(host) == 'table' then
 			local t = host
-			host, port, address_type, socket_type, protocol, flags =
-				t.host, t.port, t.address_type, t.socket_type, t.protocol, t.flags
+			host, port, address_family, socket_type, protocol, flags =
+				t.host, t.port, t.address_family, t.socket_type, t.protocol, t.flags
 		end
 		ffi.fill(hints, ffi.sizeof(hints))
 		hints.ai_socktype, hints.ai_family, hints.ai_protocol
-			= socketargs(socket_type, address_type, protocol)
+			= socketargs(socket_type, address_family, protocol)
 		hints.ai_flags = glue.bor(flags or 0, flag_bits, true)
 		local ret = C.getaddrinfo(host, port and tostring(port), hints, addrs)
 		if ret ~= 0 then return check() end
@@ -177,8 +179,8 @@ do
 		return socket_type_map[self.ai_socktype]
 	end
 
-	function ai:address_type()
-		return address_type_map[self.ai_family]
+	function ai:address_family()
+		return address_family_map[self.ai_family]
 	end
 
 	function ai:protocol()
@@ -195,7 +197,7 @@ do
 	end
 
 	function ai:address()
-		local at = self:address_type()
+		local at = self:address_family()
 		if at == 'inet' then
 			local ip = ffi.cast('struct sockaddr_in*', self.ai_addr).sin_addr
 			return string.format('%d.%d.%d.%d', ip._1, ip._2, ip._3, ip._4)
@@ -475,18 +477,18 @@ local function ConnectEx(s, ...)
 	return ConnectEx(s, ...)
 end
 
-local methods = {tcp = {}, udp = {}}
+local tcp = {}
+local udp = {}
 
 do
 
 	local WSA_FLAG_OVERLAPPED             = 0x01
 	--local WSA_FLAG_NO_HANDLE_INHERIT      = 0x80
 
-	function M.new(socktype, family, protocol)
+	local function new(methods, socktype, family, protocol)
 
 		family = family or 'inet'
 		local st, af, prot = socketargs(socktype, family, protocol)
-		assert(af ~= 0, 'address family required')
 		assert(st ~= 0, 'socket type required')
 		local flags = WSA_FLAG_OVERLAPPED
 
@@ -502,16 +504,17 @@ do
 		end
 
 		local s = {s = s, __index = socket,
-			type = socktype,
-			family = family,
-			protocol = protocol,
-			_st = socktype,
-			_af = family,
-			_prot = protocol,
+			type = socktype, family = family, protocol = protocol,
+			_st = st, _af = af, _prot = prot,
 		}
-		glue.update(s, methods[socktype])
+		glue.update(s, methods)
+		wrap_socket(s)
+
 		return setmetatable(s, s)
 	end
+	function M.tcp(...) return new(tcp, 'tcp', ...) end
+	function M.udp(...) return new(udp, 'udp', ...) end
+
 end
 
 do
@@ -612,7 +615,7 @@ do
 	local pchar_t = ffi.typeof'char*'
 	local flagsbuf = ffi.new'DWORD[1]'
 
-	function methods.tcp:send(buf, len)
+	function tcp:send(buf, len)
 		wsabuf.buf = type(buf) == 'string' and ffi.cast(pchar_t, buf) or buf
 		wsabuf.len = len or #buf
 		local o, job = overlapped()
@@ -620,7 +623,7 @@ do
 		return check_pending(ok, job)
 	end
 
-	function methods.udp:send(buf, len, ...)
+	function udp:send(buf, len, ...)
 		local ai, err = M.addr(...)
 		wsabuf.buf = type(buf) == 'string' and ffi.cast(pchar_t, buf) or buf
 		wsabuf.len = len or #buf
@@ -630,7 +633,7 @@ do
 		return check_pending(ok, job)
 	end
 
-	function methods.tcp:recv(buf, len)
+	function tcp:recv(buf, len)
 		wsabuf.buf = buf
 		wsabuf.len = len
 		local o, job = overlapped()
@@ -639,7 +642,7 @@ do
 		return check_pending(ok, job)
 	end
 
-	function methods.udp:recv(buf, len, ...)
+	function udp:recv(buf, len, ...)
 		local ai, err = M.addr(...)
 		wsabuf.buf = buf
 		wsabuf.len = len
@@ -673,7 +676,8 @@ int sendto(SOCKET s, const char *buf, int len, int flags, const struct sockaddr 
 int shutdown(SOCKET s, int how);
 ]]
 
-local methods = {tcp = {}, udp = {}}
+local tcp = {}
+local udp = {}
 
 function M.new(l4_type, l3_type)
 	local type = SOCK(l4_type)
@@ -708,19 +712,19 @@ function socket:close()
 	return check(C.close(self.s) == 0)
 end
 
-function methods.tcp:recv(buf, len)
+function tcp:recv(buf, len)
 	C.recv(self.s, buf, len, 0)
 end
 
-function methods.tcp:send(buf, len)
+function tcp:send(buf, len)
 	--int C.send(self.s, buf, len, flags);
 end
 
-function methods.udp:recv(buf, len)
+function udp:recv(buf, len)
 	--int C.recvfrom(self.s, buf, len, flags, struct sockaddr *from, int *fromlen);
 end
 
-function methods.udp:send(buf, len)
+function udp:send(buf, len)
 	--int C.sendto(self.s, buf, len, flags, const struct sockaddr *to, int tolen);
 end
 
@@ -815,7 +819,7 @@ function loop.newthread(handler, ...)
 	return newthread(handler, ...)
 end
 
-local function wrap(skt, method)
+local function wrap_method(skt, method)
 	local inherited = skt[method]
 	skt[method] = function(...)
 		local ret, job = inherited(...)
@@ -824,15 +828,15 @@ local function wrap(skt, method)
 		return coro.transfer(loop.thread)
 	end
 end
-function loop.wrap(skt)
-	wrap(skt, 'connect')
-	wrap(skt, 'send'   )
-	wrap(skt, 'recv'   )
+--[[local]] function wrap_socket(skt)
+	wrap_method(skt, 'connect')
+	wrap_method(skt, 'send'   )
+	wrap_method(skt, 'recv'   )
 end
 
-function loop.step(timeout)
-	local job, n = M.poll(timeout)
-	if not job then return nil, n end
+function loop.poll(timeout)
+	local job, n, errcode = M.poll(timeout)
+	if not job then return nil, n, errcode end
 	loop.thread = coro.running()
 	coro.resume(job.thread, n)
 	return true
@@ -842,8 +846,8 @@ local stop = false
 function loop.stop() stop = true end
 function loop.start(timeout)
 	repeat
-		local ok, err = loop.step(timeout)
-		if not ok then return nil, err end
+		local ok, err, errcode = loop.poll(timeout)
+		if not ok then return nil, err, errcode end
 	until stop
 	return true
 end
