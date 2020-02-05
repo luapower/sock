@@ -3,6 +3,18 @@ local thread = require'thread'
 local socket = require'socket2'
 local ffi = require'ffi'
 
+local function test_addr()
+	local function dump(...)
+		for ai in assert(socket.addr(...)):addresses() do
+			print(ai:address(), ai:socket_type(), ai:address_type(), ai:protocol(), ai:name())
+		end
+	end
+	dump('1234:2345:3456:4567:5678:6789:7890:8901', 0, 'tcp', 'inet6')
+	dump('123.124.125.126', 0, 'tcp', 'inet', nil, {cannonname = true})
+	dump(nil, 0, nil, nil, nil, {all = true})
+
+end
+
 local function start_server()
 	local server_thread = thread.new(function()
 		local socket = require'socket2'
@@ -43,4 +55,5 @@ local function test_http()
 
 end
 
+test_addr()
 test_http()

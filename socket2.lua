@@ -31,7 +31,15 @@ local INVALID_SOCKET = ffi.cast('SOCKET', -1)
 
 ffi.cdef[[
 struct in_addr {
-	unsigned long s_addr;
+	union {
+		unsigned long s_addr;
+		struct {
+			uint8_t _1;
+			uint8_t _2;
+			uint8_t _3;
+			uint8_t _4;
+		};
+	};
 };
 struct sockaddr_in {
 	short          sin_family;
@@ -93,11 +101,13 @@ do
 		inet = 2,
 		inet6 = 23,
 	}
+	local address_type_map = glue.index(address_types)
 
 	local socket_types = {
 		tcp = 1,
 		udp = 2,
 	}
+	local socket_type_map = glue.index(socket_types)
 
 	local protocols = {
 		ip = 0,
@@ -107,6 +117,7 @@ do
 		udp = 17,
 		raw = 255,
 	}
+	local protocol_map = glue.index(protocols)
 
 	local flag_bits = {
 		passive     = Windows and 0x00000001 or 0x0001,
@@ -146,14 +157,61 @@ do
 		return ffi.gc(addrs[0], C.freeaddrinfo)
 	end
 
-	local addrinfo = {}
+	local ai = {}
 
-	function addrinfo:free()
+	function ai:free()
 		ffi.gc(self, nil)
 		C.freeaddrinfo(self)
 	end
 
-	ffi.metatype(addrinfo_ct, {__index = addrinfo})
+	function ai:next(ai)
+		local ai = ai and ai.ai_next or self
+		return ai ~= nil and ai or nil
+	end
+
+	function ai:addresses()
+		return ai.next, self
+	end
+
+	function ai:socket_type()
+		return socket_type_map[self.ai_socktype]
+	end
+
+	function ai:address_type()
+		return address_type_map[self.ai_family]
+	end
+
+	function ai:protocol()
+		return protocol_map[self.ai_protocol]
+	end
+
+	local function str(s, len)
+		if s == nil then return nil end
+		return ffi.string(s, len)
+	end
+
+	function ai:name()
+		return str(self.ai_canonname)
+	end
+
+	function ai:address()
+		local at = self:address_type()
+		if at == 'inet' then
+			local ip = ffi.cast('struct sockaddr_in*', self.ai_addr).sin_addr
+			return string.format('%d.%d.%d.%d', ip._1, ip._2, ip._3, ip._4)
+		elseif at == 'inet6' then
+			local ip = ffi.cast('struct sockaddr_in6*', self.ai_addr).sin6_addr.s6_addr
+			--TODO: find first longest sequence of all-zero 16bit components
+			--and compress them all into a single '::'.
+			return string.format('%x:%x:%x:%x:%x:%x:%x:%x',
+				ip[ 0]*0x100+ip[ 1], ip[ 2]*0x100+ip[ 3], ip[ 4]*0x100+ip[ 5], ip[ 6]*0x100+ip[ 7],
+				ip[ 8]*0x100+ip[ 9], ip[10]*0x100+ip[11], ip[12]*0x100+ip[13], ip[14]*0x100+ip[15])
+		else
+			return str(self.ai_addr, self.ai_addrlen)
+		end
+	end
+
+	ffi.metatype(addrinfo_ct, {__index = ai})
 
 end
 
