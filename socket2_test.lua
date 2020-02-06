@@ -36,7 +36,7 @@ end
 
 local function test_http()
 
-	socket.loop.newthread(function()
+	socket.newthread(function()
 
 		local s = assert(socket.tcp())
 		--s:setblocking(true)
@@ -50,7 +50,7 @@ local function test_http()
 
 	end)
 
-	print(socket.start(1))
+	print('start', socket.start(1))
 
 end
 
