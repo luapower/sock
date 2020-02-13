@@ -183,6 +183,7 @@ do
 	end
 
 	local ai = {}
+	local ai_get = {}
 
 	function ai:free()
 		ffi.gc(self, nil)
@@ -198,23 +199,23 @@ do
 		return ai.next, self
 	end
 
-	function ai:socket_type()
+	function ai_get:socket_type()
 		return socket_type_map[self.ai_socktype]
 	end
 
-	function ai:address_family()
+	function ai_get:address_family()
 		return address_family_map[self.ai_family]
 	end
 
-	function ai:protocol()
+	function ai_get:protocol()
 		return protocol_map[self.ai_protocol]
 	end
 
-	function ai:name()
+	function ai_get:name()
 		return str(self.ai_canonname)
 	end
 
-	function ai:address()
+	function ai_get:address()
 		local at = self:address_family()
 		if at == 'inet' then
 			local ip = ffi.cast('struct sockaddr_in*', self.ai_addr).sin_addr
@@ -231,7 +232,7 @@ do
 		end
 	end
 
-	ffi.metatype(addrinfo_ct, {__index = ai})
+	ffi.metatype(addrinfo_ct, glue.gettersandsetters(ai_get, nil, ai))
 end
 
 --Windows/IOCP ---------------------------------------------------------------
@@ -596,7 +597,7 @@ do
 			job.thread = coro.running()
 			return wait()
 		end
-		return check(false)
+		return check()
 	end
 
 	local function connect_done(job)
@@ -766,7 +767,7 @@ function socket:connect(...)
 		wait()
 		goto again
 	end
-	return check(false)
+	return check()
 end
 
 function socket:close()
@@ -785,7 +786,7 @@ local function make_async(thread_field, f)
 			wait()
 			goto again
 		end
-		return check(false)
+		return check()
 	end
 end
 tcp.accept = make_async('_wt', function(self,
@@ -911,7 +912,7 @@ do
 		elseif n == 0 then
 			return false, 'timeout'
 		else
-			return check(false)
+			return check()
 		end
 	end
 end
@@ -943,7 +944,7 @@ function socket:bind(...)
 	if not ai then return false, err, errcode end
 	local ok = C.bind(self.s, ai.ai_addr, ai.ai_addrlen) == 0
 	if not err then ai:free() end
-	if not ok then return check(false) end
+	if not ok then return check() end
 	self._bound = true
 	return true
 end
@@ -968,6 +969,7 @@ glue.update(udp, socket)
 local loop_thread
 
 --[[local]] function wait()
+	assert(coro.current() ~= loop_thread, 'trying to I/O from the main thread')
 	return coro.transfer(loop_thread)
 end
 

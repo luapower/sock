@@ -6,29 +6,79 @@ on Windows, epoll on Linux and kqueue on OSX.
 
 ## API
 
+------------------------------------------------- ----------------------------
+`socket.addr(ai_args...) -> ai`                   look-up a hostname
+`ai:free()`                                       free the address list
+`ai:next() -> ai`                                 get next address in list
+`ai:addresses() -> iter() -> ai`                  iterate addresses
+`ai.socket_type -> s`                             'udp' or 'tcp'
+`ai.address_family -> s`                          'inet', 'inet6' or 'unix'
+`ai.protocol -> s`                                'ip'
+`ai.name -> s`                                    cannonical name
+`ai.address -> s`                                 formatted address
+`socket.tcp(['inet'|'inet6'], ['ip']) -> tcp`     make a TCP socket
+`socket.udp(['inet'|'inet6'], ['ip']) -> udp`     make a UDP socket
+`s:close()`                                       close connection and free socket
+`s:bind(ai_args...)`                              bind socket to IP/port
+`tcp:listen([backlog])`                           put socket in listening mode
+`tcp:connect(ai_args...)`                         connect
+`tcp:send(buf, maxlen) -> len`                    send bytes
+`tcp:recv(buf, maxlen) -> len`                    receive bytes
+`udp:send(buf, maxlen, ai_args...) -> len`        send a datagram to an address
+`udp:recv(buf, maxlen, ai_args...) -> len`        receive a datagram from an adress
+------------------------------------------------- ----------------------------
+
+All function return `nil, err, errcode` on error.
+
+I/O functions only work inside threads created with `socket.newthread()`.
+
 ## Address lookup
 
 ### `socket.addr(ai_args...) -> ai`
 
-  * ai_args: `ai | [host], [port], ['tcp'|'udp'], ['inet'|'inet6'], ['ip'], [flags]`
+  * ai_args: `ai | [host], [port|service], ['tcp'|'udp'], ['inet'|'inet6'|'unix'], ['ip'], [flags]`
 
 ## Sockets
 
-### `socket.tcp(['inet'|'inet6'], ['ip']) -> tcp | nil,err,errcode`
+### `socket.tcp(['inet'|'inet6'|'unix'], ['ip']) -> tcp`
 
-### `socket.udp(['inet'|'inet6'], ['ip']) -> udp | nil,err,errcode`
+Make a TCP socket.
 
-### `s:bind(ai_args...) -> true | nil,err,errcode`
+### `socket.udp(['inet'|'inet6'|'unix'], ['ip']) -> udp`
 
-### `tcp:connect(ai_args...) -> true | nil,err,errcode`
+Make an UDP socket.
 
-### `tcp:send(buf, maxlen) -> len | nil,err,errcode`
+### `s:close()`
 
-### `tcp:recv(buf, maxlen) -> len | nil,err,errcode`
+Close the connection and free the socket.
 
-### `udp:send(buf, maxlen, ai_args...) -> len | nil,err,errcode`
+### `s:bind(ai_args...) -> true`
 
-### `udp:recv(buf, maxlen, ai_args...) -> len | nil,err,errcode`
+Bind socket to an ip/port.
+
+### `tcp:listen(ai_args...) -> true`
+
+Put the socket in listening mode.
+
+### `tcp:connect(ai_args...) -> true`
+
+Connect to an address.
+
+### `tcp:send(buf, maxlen) -> len`
+
+Send bytes.
+
+### `tcp:recv(buf, maxlen) -> len`
+
+Receive bytes.
+
+### `udp:send(buf, maxlen, ai_args...) -> len`
+
+Send a datagram.
+
+### `udp:recv(buf, maxlen, ai_args...) -> len`
+
+Receive a datagram.
 
 ## Socket loop
 
