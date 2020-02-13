@@ -41,11 +41,15 @@ local function test_http()
 		local s = assert(socket.tcp())
 		--s:setblocking(true)
 		--assert(s:bind('127.0.0.1', 800))
-		print('connect', s:connect(ffi.abi'win' and '127.0.0.1' or '10.0.0.5', 80))
+		print('connect', s:connect(ffi.abi'win' and '127.0.0.1' or '10.8.2.153', 80))
 		print('send', s:send'GET / HTTP/1.0\r\n\r\n')
 		local buf = ffi.new'char[4096]'
-		local n, err = s:recv(buf, 4096)
-		print('recv', n, n and ffi.string(buf, n) or err)
+		local n, err, ec = s:recv(buf, 4096)
+		if n then
+			print('recv', n, ffi.string(buf, n))
+		else
+			print(n, err, ec)
+		end
 		s:close()
 
 	end)

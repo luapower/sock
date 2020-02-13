@@ -1,5 +1,5 @@
 
---Portable socket API with IOCP and epoll for LuaJIT.
+--Portable socket API with IOCP, epoll and kqueue for LuaJIT.
 --Written by Cosmin Apreutesei. Public Domain.
 
 if not ... then require'socket2_test'; return end
@@ -13,8 +13,11 @@ local coro = require'coro'
 local push = table.insert
 local pop = table.remove
 
-local Windows = ffi.abi'win'
-local Linux = ffi.os == 'Linux'
+local Windows = ffi.os == 'Windows'
+local Linux   = ffi.os == 'Linux'
+local OSX     = ffi.os == 'OSX'
+
+assert(Windows or Linux or OSX, 'unsupported platform')
 
 local C = Windows and ffi.load'ws2_32' or ffi.C
 local M = {C = C}
@@ -26,14 +29,6 @@ local udp = {} --methods of udp sockets
 local check --fw. decl.
 local wait --fw. decl.
 
-ffi.cdef[[
-typedef unsigned long u_long;
-typedef uintptr_t SOCKET;
-typedef struct sockaddr sockaddr;
-]]
-
-local INVALID_SOCKET = ffi.cast('SOCKET', -1)
-
 local function str(s, len)
 	if s == nil then return nil end
 	return ffi.string(s, len)
@@ -42,6 +37,8 @@ end
 --all/sockaddr construction --------------------------------------------------
 
 ffi.cdef[[
+typedef struct sockaddr sockaddr;
+
 struct in_addr {
 	union {
 		unsigned long s_addr;
@@ -72,14 +69,15 @@ struct sockaddr_in6 {
 };
 ]]
 
+-- working around ABI blindness of C programmers...
 if Windows then
 	ffi.cdef[[
 	struct addrinfo {
-		int             ai_flags;
-		int             ai_family;
-		int             ai_socktype;
-		int             ai_protocol;
-		size_t          ai_addrlen;
+		int              ai_flags;
+		int              ai_family;
+		int              ai_socktype;
+		int              ai_protocol;
+		size_t           ai_addrlen;
 		char            *ai_canonname;
 		struct sockaddr *ai_addr;
 		struct addrinfo *ai_next;
@@ -102,8 +100,7 @@ end
 
 ffi.cdef[[
 int getaddrinfo(const char *node, const char *service,
-	const struct addrinfo *hints,
-	struct addrinfo **res);
+	const struct addrinfo *hints, struct addrinfo **res);
 void freeaddrinfo(struct addrinfo *);
 ]]
 
@@ -236,22 +233,6 @@ do
 	ffi.metatype(addrinfo_ct, {__index = ai})
 end
 
---all/binding ----------------------------------------------------------------
-
-ffi.cdef[[
-int bind(SOCKET s, const sockaddr*, int namelen);
-]]
-
-function socket:bind(...)
-	local ai, err, errcode = M.addr(...)
-	if not ai then return false, err, errcode end
-	local ok = C.bind(self.s, ai.ai_addr, ai.ai_addrlen) == 0
-	if not err then ai:free() end
-	if not ok then return check(false) end
-	self._bound = true
-	return true
-end
-
 --Windows/IOCP ---------------------------------------------------------------
 
 if Windows then
@@ -259,6 +240,8 @@ if Windows then
 require'winapi.types'
 
 ffi.cdef[[
+
+typedef uintptr_t SOCKET;
 
 // IOCP ----------------------------------------------------------------------
 
@@ -292,12 +275,12 @@ typedef unsigned int GROUP;
 typedef struct _WSAPROTOCOL_INFOW WSAPROTOCOL_INFOW, *LPWSAPROTOCOL_INFOW;
 
 SOCKET WSASocketW(
-  int                 af,
-  int                 type,
-  int                 protocol,
-  LPWSAPROTOCOL_INFOW lpProtocolInfo,
-  GROUP               g,
-  DWORD               dwFlags
+	int                 af,
+	int                 type,
+	int                 protocol,
+	LPWSAPROTOCOL_INFOW lpProtocolInfo,
+	GROUP               g,
+	DWORD               dwFlags
 );
 int closesocket(SOCKET s);
 
@@ -316,20 +299,20 @@ int WSACleanup(void);
 int WSAGetLastError();
 
 typedef struct _WSABUF {
-  ULONG len;
-  CHAR  *buf;
+	ULONG len;
+	CHAR  *buf;
 } WSABUF, *LPWSABUF;
 
 int WSAIoctl(
-  SOCKET        s,
-  DWORD         dwIoControlCode,
-  LPVOID        lpvInBuffer,
-  DWORD         cbInBuffer,
-  LPVOID        lpvOutBuffer,
-  DWORD         cbOutBuffer,
-  LPDWORD       lpcbBytesReturned,
-  LPOVERLAPPED  lpOverlapped,
-  void*         lpCompletionRoutine
+	SOCKET        s,
+	DWORD         dwIoControlCode,
+	LPVOID        lpvInBuffer,
+	DWORD         cbInBuffer,
+	LPVOID        lpvOutBuffer,
+	DWORD         cbOutBuffer,
+	LPDWORD       lpcbBytesReturned,
+	LPOVERLAPPED  lpOverlapped,
+	void*         lpCompletionRoutine
 );
 
 typedef BOOL (*LPFN_CONNECTEX) (
@@ -444,9 +427,9 @@ do
 		[10013] = 'access_denied',
 	}
 
-	function check(ret)
+	function check(ret, err)
 		if ret then return ret end
-		local err = C.WSAGetLastError()
+		local err = err or C.WSAGetLastError()
 		local msg = error_classes[err]
 		if not msg then
 			local buf, bufsz = errbuf(256)
@@ -517,6 +500,7 @@ end
 
 do
 	local WSA_FLAG_OVERLAPPED = 0x01
+	local INVALID_SOCKET = ffi.cast('SOCKET', -1)
 
 	local function new(class, socktype, family, protocol)
 
@@ -593,11 +577,19 @@ do
 	local keybuf = ffi.new'ULONG_PTR[1]'
 	local obuf = ffi.new'LPOVERLAPPED[1]'
 
+	local WAIT_TIMEOUT = 258
+
 	function M.poll(timeout)
 		timeout = glue.clamp(timeout or 1/0, 0, 0xFFFFFFFF)
 		local ok = ffi.C.GetQueuedCompletionStatus(
 			iocp, nbuf, keybuf, obuf, timeout * 1000) ~= 0
-		if not ok then return check() end
+		if not ok then
+			local err = C.WSAGetLastError()
+			if err == WAIT_TIMEOUT then
+				return false, 'timeout'
+			end
+			return check(nil, err)
+		end
 		local o = obuf[0]
 		local n = nbuf[0]
 		local job = free_overlapped(o)
@@ -620,7 +612,6 @@ do
 	local function connect_done(job)
 		return true
 	end
-
 	function tcp:connect(...)
 		if not self._bound then
 			--ConnectEx requires binding first.
@@ -723,39 +714,56 @@ end --if Windows
 
 local register_socket, unregister_socket --fw. decl.
 
-if not Windows then
+if Linux or OSX then
 
+ffi.cdef[[
+typedef int SOCKET;
+int socket(int af, int type, int protocol);
+int accept(int s, struct sockaddr *addr, int *addrlen);
+int close(int s);
+int connect(int s, const struct sockaddr *name, int namelen);
+int ioctl(int s, long cmd, unsigned long *argp, ...);
+int fcntl(int fd, int cmd, ...);
+int listen(int s, int backlog);
+int recv(int s, char *buf, int len, int flags);
+int recvfrom(int s, char *buf, int len, int flags, struct sockaddr *from, int *fromlen);
+int send(int s, const char *buf, int len, int flags);
+int sendto(int s, const char *buf, int len, int flags, const struct sockaddr *to, int tolen);
+int shutdown(int s, int how);
+]]
+
+--error handling.
 ffi.cdef'char *strerror(int errnum);'
-
 function check(ret)
 	if ret then return ret end
 	local err = ffi.errno()
 	return ret, str(C.strerror(err)), err
 end
 
-ffi.cdef[[
-SOCKET socket(int af, int type, int protocol);
-SOCKET accept(SOCKET s, struct sockaddr *addr, int *addrlen);
-int bind(SOCKET s, const struct sockaddr *name, int namelen);
-int close(SOCKET s);
-int connect(SOCKET s, const struct sockaddr *name, int namelen);
-int ioctl(SOCKET s, long cmd, u_long *argp, ...);
-int listen(SOCKET s, int backlog);
-int recv(SOCKET s, char *buf, int len, int flags);
-int recvfrom(SOCKET s, char *buf, int len, int flags, struct sockaddr *from, int *fromlen);
-int send(SOCKET s, const char *buf, int len, int flags);
-int sendto(SOCKET s, const char *buf, int len, int flags, const struct sockaddr *to, int tolen);
-int shutdown(SOCKET s, int how);
-]]
+local F_GETFL = Linux and 3
+local F_SETFL = Linux and 4
+local O_NONBLOCK = Linux and 04000
 
 local function new(class, socktype, family, protocol)
 	family = family or 'inet'
 	local st, af, prot = socketargs(socktype, family, protocol)
 	assert(st ~= 0, 'socket type required')
+
 	local s = C.socket(af, st, prot)
-	if s == INVALID_SOCKET then
+	if s == -1 then
 		return check()
 	end
+
+	--set socket to non-blocking
+	local flags = C.fcntl(s, F_GETFL, 0)
+	if flags == -1 then
+		return check()
+	end
+	local ok = C.fcntl(s, F_SETFL, ffi.cast('int', bit.bor(flags, O_NONBLOCK))) == 0
+	if not ok then
+		return check()
+	end
+
 	local s = {s = s, __index = class,
 		type = socktype, family = family, protocol = protocol,
 		_st = st, _af = af, _prot = prot,
@@ -777,8 +785,8 @@ function socket:connect(...)
 	::again::
 	local ret = C.connect(self.s, ai.ai_addr, ai.ai_addrlen)
 	if ret == 0 then return true end
-	if ffi.errno == EINPROGRESS then
-		self._read_thread = coro.running()
+	if ffi.errno() == EINPROGRESS then
+		self._wt = coro.running()
 		wait()
 		goto again
 	end
@@ -791,29 +799,29 @@ function socket:close()
 	return check(ok)
 end
 
-local function make_async(f)
+local function make_async(thread_field, f)
 	return function(self, ...)
 		::again::
 		local ret = f(self, ...)
 		if ret >= 0 then return ret end
-		if ret == EWOULDBLOCK then
-			self._read_thread = coro.running()
+		if ffi.errno() == EWOULDBLOCK then
+			self[thread_field] = coro.running()
 			wait()
 			goto again
 		end
 		return check(false)
 	end
 end
-tcp.send = make_async(function(self, buf, len, flags)
+tcp.send = make_async('_wt', function(self, buf, len, flags)
 	return C.send(self.s, buf, len or #buf, flags or 0)
 end)
-tcp.recv = make_async(function(self, buf, len, flags)
+tcp.recv = make_async('_rt', function(self, buf, len, flags)
 	return C.recv(self.s, buf, len, flags or 0)
 end)
-local udp_send = make_async(function(self, buf, len, flags, ai)
+local udp_send = make_async('_wt', function(self, buf, len, flags, ai)
 	return C.sendto(self.s, buf, len or #buf, flags or 0, ai.ai_addr, ai.ai_addrlen)
 end)
-local udp_recv = make_async(function(self, buf, len, flags, ai)
+local udp_recv = make_async('_rt', function(self, buf, len, flags, ai)
 	local ret = C.recvfrom(self.s, buf, len, flags or 0, ai.ai_addr, ai.ai_addrlen)
 end)
 function udp:send(buf, len, flags, ...)
@@ -829,35 +837,11 @@ end
 
 end --if not Windows
 
---all/select -----------------------------------------------------------------
-
-ffi.cdef[[
-//int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, const struct timeval *timeout);
-]]
-
 --Linux/epoll ----------------------------------------------------------------
 
 if Linux then
 
 ffi.cdef[[
-enum EPOLL_EVENTS {
-	EPOLLIN = 0x001,
-	EPOLLPRI = 0x002,
-	EPOLLOUT = 0x004,
-	EPOLLRDNORM = 0x040,
-	EPOLLRDBAND = 0x080,
-	EPOLLWRNORM = 0x100,
-	EPOLLWRBAND = 0x200,
-	EPOLLMSG = 0x400,
-	EPOLLERR = 0x008,
-	EPOLLHUP = 0x010,
-	EPOLLRDHUP = 0x2000,
-	EPOLLEXCLUSIVE = 1u << 28,
-	EPOLLWAKEUP = 1u << 29,
-	EPOLLONESHOT = 1u << 30,
-	EPOLLET = 1u << 31
-};
-
 typedef union epoll_data {
 	void *ptr;
 	int fd;
@@ -874,6 +858,10 @@ int epoll_create1(int flags);
 int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event);
 int epoll_wait(int epfd, struct epoll_event *events, int maxevents, int timeout);
 ]]
+
+local EPOLLIN        = 0x0001
+local EPOLLOUT       = 0x0004
+local EPOLLET        = 2^31
 
 local EPOLL_CTL_ADD = 1
 local EPOLL_CTL_DEL = 2
@@ -899,9 +887,6 @@ do
 	local n = 0
 
 	--[[local]] function register_socket(s)
-		local e = ffi.new'struct epoll_event'
-		e.events = C.EPOLLIN + C.EPOLLOUT
-		assert(check(C.epoll_ctl(M.epoll_fd(), EPOLL_CTL_ADD, s.s, e) == 0))
 		local i = pop(free_indices)
 		if not i then
 			n = n + 1
@@ -910,7 +895,10 @@ do
 		s._i = i
 		s._e = e
 		sockets[i] = s
+		local e = ffi.new'struct epoll_event'
 		e.data.u32 = i
+		e.events = EPOLLIN + EPOLLOUT + EPOLLET
+		assert(check(C.epoll_ctl(M.epoll_fd(), EPOLL_CTL_ADD, s.s, e) == 0))
 	end
 
 	--[[local]] function unregister_socket(s)
@@ -920,22 +908,27 @@ do
 		push(free_indices, i)
 	end
 
-	local events = ffi.new'struct epoll_event[1]'
+	local function resume(socket, e, event, thread_field)
+		if bit.band(e, event) ~= 0 then --read
+			local thread = socket[thread_field]
+			if not thread then return end --misfire.
+			socket[thread_field] = false
+			coro.transfer(thread)
+		end
+	end
+	local maxevents = 1
+	local events = ffi.new('struct epoll_event[?]', maxevents)
 	function M.poll(timeout)
-		local fdn = C.epoll_wait(M.epoll_fd(), events, 1, timeout)
-		if fdn > 0 then
-			for i = 0, fdn-1 do
+	 	local n = C.epoll_wait(M.epoll_fd(), events, maxevents, timeout * 1000)
+		if n > 0 then
+			for i = 0, n-1 do
+				local socket = sockets[events[i].data.u32]
 				local e = events[i].events
-				local socket = sockets[e.data.u32]
-				if bit.band(e, EPOLLIN) then --read
-					coro.transfer(socket._read_thread)
-				end
-				if bit.band(e, EPOLLOUT) then --write
-					coro.transfer(socket._write_thread)
-				end
+				resume(socket, e, EPOLLIN , '_rt')
+				resume(socket, e, EPOLLOUT, '_wt')
 			end
 			return true
-		elseif fdn == 0 then
+		elseif n == 0 then
 			return false, 'timeout'
 		else
 			return check(false)
@@ -944,6 +937,36 @@ do
 end
 
 end --if Linux
+
+--OSX/kqueue -----------------------------------------------------------------
+
+if OSX then
+
+ffi.cdef[[
+int kqueue(void);
+int kevent(int kq, const struct kevent *changelist, int nchanges,
+	struct kevent *eventlist, int nevents,
+	const struct timespec *timeout);
+// EV_SET(&kev, ident, filter, flags, fflags, data, udata);
+]]
+
+end --if OSX
+
+--all/binding ----------------------------------------------------------------
+
+ffi.cdef[[
+int bind(SOCKET s, const sockaddr*, int namelen);
+]]
+
+function socket:bind(...)
+	local ai, err, errcode = M.addr(...)
+	if not ai then return false, err, errcode end
+	local ok = C.bind(self.s, ai.ai_addr, ai.ai_addrlen) == 0
+	if not err then ai:free() end
+	if not ok then return check(false) end
+	self._bound = true
+	return true
+end
 
 glue.update(tcp, socket)
 glue.update(udp, socket)
