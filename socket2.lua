@@ -109,6 +109,7 @@ do
 	local address_families = {
 		inet  = Windows and  2 or Linux and  2,
 		inet6 = Windows and 23 or Linux and 10,
+		unix  = Linux and 1,
 	}
 	local address_family_map = glue.index(address_families)
 
@@ -378,17 +379,6 @@ int WSARecvFrom(
 	LPINT        lpFromlen,
 	LPOVERLAPPED lpOverlapped,
 	void*        lpCompletionRoutine
-);
-
-BOOL AcceptEx(
-	SOCKET       sListenSocket,
-	SOCKET       sAcceptSocket,
-	PVOID        lpOutputBuffer,
-	DWORD        dwReceiveDataLength,
-	DWORD        dwLocalAddressLength,
-	DWORD        dwRemoteAddressLength,
-	LPDWORD      lpdwBytesReceived,
-	LPOVERLAPPED lpOverlapped
 );
 
 void GetAcceptExSockaddrs(
@@ -723,8 +713,6 @@ int accept(int s, struct sockaddr *addr, int *addrlen);
 int close(int s);
 int connect(int s, const struct sockaddr *name, int namelen);
 int ioctl(int s, long cmd, unsigned long *argp, ...);
-int fcntl(int fd, int cmd, ...);
-int listen(int s, int backlog);
 int recv(int s, char *buf, int len, int flags);
 int recvfrom(int s, char *buf, int len, int flags, struct sockaddr *from, int *fromlen);
 int send(int s, const char *buf, int len, int flags);
@@ -740,27 +728,15 @@ function check(ret)
 	return ret, str(C.strerror(err)), err
 end
 
-local F_GETFL = Linux and 3
-local F_SETFL = Linux and 4
-local O_NONBLOCK = Linux and 04000
+local SOCK_NONBLOCK = Linux and tonumber(4000, 8)
 
 local function new(class, socktype, family, protocol)
 	family = family or 'inet'
 	local st, af, prot = socketargs(socktype, family, protocol)
 	assert(st ~= 0, 'socket type required')
 
-	local s = C.socket(af, st, prot)
+	local s = C.socket(af, bit.bor(st, SOCK_NONBLOCK), prot)
 	if s == -1 then
-		return check()
-	end
-
-	--set socket to non-blocking
-	local flags = C.fcntl(s, F_GETFL, 0)
-	if flags == -1 then
-		return check()
-	end
-	local ok = C.fcntl(s, F_SETFL, ffi.cast('int', bit.bor(flags, O_NONBLOCK))) == 0
-	if not ok then
 		return check()
 	end
 
@@ -812,6 +788,10 @@ local function make_async(thread_field, f)
 		return check(false)
 	end
 end
+tcp.accept = make_async('_wt', function(self,
+	return C.accept(self.s, struct sockaddr *addr, int *addrlen);
+
+end)
 tcp.send = make_async('_wt', function(self, buf, len, flags)
 	return C.send(self.s, buf, len or #buf, flags or 0)
 end)
@@ -967,6 +947,18 @@ function socket:bind(...)
 	self._bound = true
 	return true
 end
+
+--all/listen -----------------------------------------------------------------
+
+ffi.cdef[[
+int listen(SOCKET s, int backlog);
+]]
+
+function tcp:listen(backlog)
+	return check(C.listen(self.s, backlog or 0x7fffffff) == 0)
+end
+
+--inherit socket -------------------------------------------------------------
 
 glue.update(tcp, socket)
 glue.update(udp, socket)

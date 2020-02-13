@@ -20,13 +20,19 @@ local function start_server()
 		local socket = require'socket2'
 		local s = assert(socket.new'tcp')
 		assert(s:bind('127.0.0.1', 8090))
+		assert(s:listen())
+		while true do
+			local cs = assert(s:accept())
+			local thread = socket.newthread(function()
+
+			end)
+		end
 		s:close()
 	end)
 
 	local s = assert(socket.socket'tcp')
 
 	--assert(s:bind('127.0.0.1', 8090))
-	s:setblocking(false)
 	print(s:connect('127.0.0.1', '8080'))
 	--assert(s:send'hello')
 	s:close()
@@ -58,5 +64,7 @@ local function test_http()
 
 end
 
-test_addr()
-test_http()
+start_server()
+
+--test_addr()
+--test_http()
