@@ -6,7 +6,7 @@ local ffi = require'ffi'
 local function test_addr()
 	local function dump(...)
 		for ai in assert(socket.addr(...)):addresses() do
-			print(ai:address(), ai:socket_type(), ai:address_family(), ai:protocol(), ai:name())
+			print(ai.addr:tostring(), ai.socket_type, ai.address_family, ai.protocol, ai.name)
 		end
 	end
 	dump('1234:2345:3456:4567:5678:6789:7890:8901', 0, 'tcp', 'inet6')
@@ -18,24 +18,29 @@ end
 local function start_server()
 	local server_thread = thread.new(function()
 		local socket = require'socket2'
-		local s = assert(socket.new'tcp')
-		assert(s:bind('127.0.0.1', 8090))
+		local s = assert(socket.tcp())
+		assert(s:bind('0.0.0.0', 8090))
 		assert(s:listen())
-		while true do
-			local cs = assert(s:accept())
-			local thread = socket.newthread(function()
-
-			end)
-		end
-		s:close()
+		socket.newthread(function()
+			while true do
+				local cs, ra, la = assert(s:accept())
+				print('accepted', cs,
+					ra:tostring(), ra.port,
+					la and la:tostring(), la and la.port)
+				local thread = socket.newthread(function()
+					--
+				end)
+			end
+			s:close()
+		end)
+		socket.start()
 	end)
 
-	local s = assert(socket.socket'tcp')
-
-	--assert(s:bind('127.0.0.1', 8090))
-	print(s:connect('127.0.0.1', '8080'))
-	--assert(s:send'hello')
-	s:close()
+	-- local s = assert(socket.tcp())
+	-- --assert(s:bind('127.0.0.1', 8090))
+	-- print(s:connect('127.0.0.1', '8080'))
+	-- --assert(s:send'hello')
+	-- s:close()
 
 	server_thread:join()
 end
@@ -47,7 +52,7 @@ local function test_http()
 		local s = assert(socket.tcp())
 		--s:setblocking(true)
 		--assert(s:bind('127.0.0.1', 800))
-		print('connect', s:connect(ffi.abi'win' and '127.0.0.1' or '10.8.2.153', 80))
+		print('connect', s:connect(ffi.abi'win' and '127.0.0.1' or '10.0.0.5', 80))
 		print('send', s:send'GET / HTTP/1.0\r\n\r\n')
 		local buf = ffi.new'char[4096]'
 		local n, err, ec = s:recv(buf, 4096)
