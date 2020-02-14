@@ -25,9 +25,12 @@ local M = {C = C}
 local socket = {} --common socket methods
 local tcp = {} --methods of tcp sockets
 local udp = {} --methods of udp sockets
+local raw = {} --methods of raw sockets
 
 local check --fw. decl.
 local wait --fw. decl.
+local create_socket --fw. decl.
+local wrap_socket --fw. decl.
 
 local function str(s, len)
 	if s == nil then return nil end
@@ -39,29 +42,24 @@ end
 ffi.cdef[[
 struct sockaddr_in {
 	short          family_num;
-	unsigned short port;
-	union {
-		unsigned long uint;
-		uint8_t bytes[4];
-	} ip;
+	uint8_t        port_bytes[2];
+	uint8_t        ip_bytes[4];
 	char           _zero[8];
 };
 
 struct sockaddr_in6 {
 	short           family_num;
-	unsigned short  port;
+	uint8_t         port_bytes[2];
 	unsigned long   flowinfo;
-	union {
-		unsigned char bytes[16];
-	} ip;
+	uint8_t         ip_bytes[16];
 	unsigned long   scope_id;
 };
 
 typedef struct sockaddr {
 	union {
 		struct {
-			short            family_num;
-			unsigned short   port;
+			short   family_num;
+			uint8_t port_bytes[2];
 		};
 		struct sockaddr_in  addr4;
 		struct sockaddr_in6 addr6;
@@ -142,11 +140,17 @@ do
 		addrconfig  = Windows and 0x00000400 or 0x0020,
 	}
 
+	local default_protocols = {
+		[socket_types.tcp] = protocols.tcp,
+		[socket_types.udp] = protocols.udp,
+		[socket_types.raw] = protocols.raw,
+	}
+
 	function socketargs(socket_type, family, protocol)
 		local st = socket_types[socket_type] or socket_type or 0
 		local af = families[family] or family or 0
-		local prot = protocols[protocol] or protocol or 0
-		return st, af, prot
+		local pr = protocols[protocol] or protocol or default_protocols[st] or 0
+		return st, af, pr
 	end
 
 	local hints = ffi.new'struct addrinfo'
@@ -166,6 +170,9 @@ do
 	end
 
 	function M.addr(host, port, socket_type, family, protocol, flags)
+		if host == nil or host == '*' then host = '0.0.0.0' end --all.
+		if host == false then host = nil end --loopback.
+		if port == nil then port = 0 end --all.
 		if ffi.istype(addrinfo_ct, host) then
 			return host, true --pass-through and return "not owned" flag
 		elseif type(host) == 'table' then
@@ -183,7 +190,6 @@ do
 	end
 
 	local ai = {}
-	local ai_get = {}
 
 	function ai:free()
 		ffi.gc(self, nil)
@@ -195,38 +201,26 @@ do
 		return ai ~= nil and ai or nil
 	end
 
-	function ai:addresses()
+	function ai:addrs()
 		return ai.next, self
 	end
 
-	function ai_get:socket_type()
-		return socket_type_map[self.socktype_num]
-	end
-
-	function ai_get:family()
-		return family_map[self.family_num]
-	end
-
-	function ai_get:protocol()
-		return protocol_map[self.protocol_num]
-	end
-
-	function ai_get:name()
-		return str(self.name_ptr)
-	end
+	function ai:type     () return socket_type_map[self.socktype_num] end
+	function ai:family   () return family_map     [self.family_num  ] end
+	function ai:protocol () return protocol_map   [self.protocol_num] end
+	function ai:name     () return str(self.name_ptr) end
+	function ai:tostring () return self.addr:tostring() end
 
 	local sa = {}
-	local sa_get = {}
 
-	function sa_get:family()
-		return family_map[self.family_num]
-	end
+	function sa:family () return family_map[self.family_num] end
+	function sa:port   () return self.port_bytes[0] * 0x100 + self.port_bytes[1] end
 
 	local AF_INET  = families.inet
 	local AF_INET6 = families.inet6
 	local AF_UNIX  = families.unix
 
-	function sa_get:address()
+	function sa:addr()
 		local af = self.family_num
 		return af == AF_INET and self.addr4
 			 or af == AF_INET6 and self.addr6
@@ -234,34 +228,24 @@ do
 	end
 
 	function sa:tostring()
-		return self.address:tostring()
+		return self:addr():tostring()..(self:port() ~= 0 and ':'..self:port() or '')
 	end
 
-	ffi.metatype('struct sockaddr', glue.gettersandsetters(sa_get, nil, sa))
+	ffi.metatype('struct sockaddr', {__index = sa})
 
 	local sa_in4 = {}
-	local sa_in4_get = {}
-
-	function sa_in4_get:family()
-		return family_map[self.family_num]
-	end
 
 	function sa_in4:tostring()
-		local b = self.ip.bytes
+		local b = self.ip_bytes
 		return string.format('%d.%d.%d.%d', b[0], b[1], b[2], b[3])
 	end
 
-	ffi.metatype('struct sockaddr_in', glue.gettersandsetters(sa_in4_get, nil, sa_in4))
+	ffi.metatype('struct sockaddr_in', {__index = sa_in4})
 
 	local sa_in6 = {}
-	local sa_in6_get = {}
-
-	function sa_in6_get:family()
-		return family_map[self.family_num]
-	end
 
 	function sa_in6:tostring()
-		local b = self.ip.bytes
+		local b = self.ip_bytes
 		--TODO: find first longest sequence of all-zero 16bit components
 		--and compress them all into a single '::'.
 		return string.format('%x:%x:%x:%x:%x:%x:%x:%x',
@@ -269,9 +253,18 @@ do
 			b[ 8]*0x100+b[ 9], b[10]*0x100+b[11], b[12]*0x100+b[13], b[14]*0x100+b[15])
 	end
 
-	ffi.metatype('struct sockaddr_in6', glue.gettersandsetters(sa_in6_get, nil, sa_in6))
+	ffi.metatype('struct sockaddr_in6', {__index = sa_in6})
 
-	ffi.metatype(addrinfo_ct, glue.gettersandsetters(ai_get, nil, ai))
+	ffi.metatype(addrinfo_ct, {__index = ai})
+
+	function socket:type     () return socket_type_map[self._st] end
+	function socket:family   () return family_map     [self._af] end
+	function socket:protocol () return protocol_map   [self._pr] end
+
+	function socket:addr(host, port, flags)
+		return M.addr(host, port, self._st, self._af, self._pr, addr_flags)
+	end
+
 end
 
 --Windows/IOCP ---------------------------------------------------------------
@@ -530,14 +523,14 @@ do
 	local WSA_FLAG_OVERLAPPED = 0x01
 	local INVALID_SOCKET = ffi.cast('SOCKET', -1)
 
-	local function new(class, socktype, family, protocol)
+	function create_socket(class, socktype, family, protocol)
 
 		family = family or 'inet'
-		local st, af, prot = socketargs(socktype, family, protocol)
+		local st, af, pr = socketargs(socktype, family, protocol)
 		assert(st ~= 0, 'socket type required')
 		local flags = WSA_FLAG_OVERLAPPED
 
-		local s = C.WSASocketW(af, st, prot, nil, 0, flags)
+		local s = C.WSASocketW(af, st, pr, nil, 0, flags)
 
 		if s == INVALID_SOCKET then
 			return check()
@@ -548,18 +541,12 @@ do
 			return check()
 		end
 
-		local s = {s = s, __index = class,
-			type = socktype, family = family, protocol = protocol,
-			_st = st, _af = af, _prot = prot,
-		}
-		return setmetatable(s, s)
+		return wrap_socket(class, s, st, af, pr)
 	end
-	function M.tcp(...) return new(tcp, 'tcp', ...) end
-	function M.udp(...) return new(udp, 'udp', ...) end
 end
 
 function socket:close()
-	C.closesocket(self.s)
+	return check(C.closesocket(self.s) == 0)
 end
 
 local overlapped
@@ -608,20 +595,26 @@ do
 	local WAIT_TIMEOUT = 258
 
 	function M.poll(timeout)
-		timeout = glue.clamp((timeout or 1/0) * 1000, 0, 0xffffffff)
+		timeout = math.max((timeout or 1/0) * 1000, 0)
+		--we're going infinite after 0x7fffffff for compat. with Linux.
+		if timeout > 0x7fffffff then timeout = 0xffffffff end
 		local ok = ffi.C.GetQueuedCompletionStatus(
 			M.iocp(), nbuf, keybuf, obuf, timeout) ~= 0
-		if not ok then
+		local o = obuf[0]
+		if o == nil then
 			local err = C.WSAGetLastError()
 			if err == WAIT_TIMEOUT then
 				return false, 'timeout'
 			end
 			return check(nil, err)
 		end
-		local o = obuf[0]
 		local n = nbuf[0]
 		local job = free_overlapped(o)
-		coro.transfer(job.thread, job:done(n))
+		if ok then
+			coro.transfer(job.thread, job:done(n))
+		else
+			coro.transfer(job.thread, check())
+		end
 		return true
 	end
 end
@@ -641,14 +634,14 @@ do
 		return true
 	end
 
-	function tcp:connect(...)
+	function tcp:connect(host, port, addr_flags)
 		if not self._bound then
 			--ConnectEx requires binding first.
-			local ok, err, errcode = self:bind(nil, 0, self._st, self._af, self._prot)
+			local ok, err, errcode = self:bind()
 			if not ok then return nil, err, errcode end
 		end
-		local ai, err, errcode = M.addr(...)
-		if not ai then return false, err, errcode end
+		local ai, err, errcode = self:addr(host, port, addr_flags)
+		if not ai then return nil, err, errcode end
 		local o, job = overlapped(return_true)
 		local ok = ConnectEx(self.s, ai.addr, ai.addrlen, nil, 0, nil, o) == 1
 		if not err then ai:free() end
@@ -666,7 +659,7 @@ do
 	local accept_buf = accept_buf_ct()
 	local sa_len = ffi.sizeof(accept_buf) / 2
 	function tcp:accept()
-		local client_s, err, errcode = M.tcp(self._af, self._prot)
+		local client_s, err, errcode = M.tcp(self._af, self._pr)
 		if not client_s then return nil, err, errcode end
 		local o, job = overlapped(return_true)
 		local ok = AcceptEx(self.s, client_s.s, accept_buf, 0, sa_len, sa_len, nbuf, o) == 1
@@ -681,7 +674,6 @@ do
 	local flagsbuf = ffi.new'DWORD[1]'
 
 	local function io_done(job, n)
-		job.socket = nil
 		return n
 	end
 
@@ -693,13 +685,13 @@ do
 		return check_pending(ok, job)
 	end
 
-	function udp:send(buf, len, ...)
-		local ai, err, errcode = M.addr(...)
+	function udp:send(buf, len, host, port, flags, addr_flags)
+		local ai, err, errcode = self:addr(host, port, addr_flags)
 		if not ai then return nil, err, errcode end
 		wsabuf.buf = type(buf) == 'string' and ffi.cast(pchar_t, buf) or buf
 		wsabuf.len = len or #buf
 		local o, job = overlapped(io_done)
-		local ok = C.WSASendTo(self.s, wsabuf, 1, nbuf, 0, ai.addr, ai.addrlen, o, nil) == 0
+		local ok = C.WSASendTo(self.s, wsabuf, 1, nbuf, flags, ai.addr, ai.addrlen, o, nil) == 0
 		ai:free()
 		return check_pending(ok, job)
 	end
@@ -713,13 +705,13 @@ do
 		return check_pending(ok, job)
 	end
 
-	function udp:recv(buf, len, ...)
-		local ai, err, errcode = M.addr(...)
+	function udp:recv(buf, len, host, port, flags, addr_flags)
+		local ai, err, errcode = self:addr(host, port, addr_flags)
 		if not ai then return nil, err, errcode end
 		wsabuf.buf = buf
 		wsabuf.len = len
 		local o, job = overlapped(io_done)
-		flagsbuf[0] = 0
+		flagsbuf[0] = flags
 		local ok = C.WSARecvFrom(self.s, wsabuf, 1, nbuf, flagsbuf, ai.addr, ai.addrlen, o, nil) == 0
 		ai:free()
 		return check_pending(ok, job)
@@ -759,34 +751,20 @@ end
 
 local SOCK_NONBLOCK = Linux and tonumber(4000, 8)
 
-local function wrap(s, class, socktype, family, protocol, st, af, prot)
+function create_socket(class, socktype, family, protocol)
+	family = family or 'inet'
+	local st, af, pr = socketargs(socktype, family, protocol)
+	local s = C.socket(af, bit.bor(st, SOCK_NONBLOCK), pr)
 	if s == -1 then
 		return check()
 	end
-	local s = {s = s, __index = class,
-		type = socktype, family = family, protocol = protocol,
-		_st = st, _af = af, _prot = prot,
-	}
-	register_socket(s)
-	return setmetatable(s, s)
-end
-
-do
-	local function new(class, socktype, family, protocol)
-		family = family or 'inet'
-		local st, af, prot = socketargs(socktype, family, protocol)
-		assert(st ~= 0, 'socket type required')
-		return wrap(C.socket(af, bit.bor(st, SOCK_NONBLOCK), prot),
-			class, socktype, family, protocol, st, af, prot)
-	end
-	function M.tcp(...) return new(tcp, 'tcp', ...) end
-	function M.udp(...) return new(udp, 'udp', ...) end
+	return wrap_socket(class, s, st, af, pr)
 end
 
 function socket:close()
-	unregister_socket(self)
-	local ok = C.close(self.s) == 0
-	return check(ok)
+	local ok, err, errcode = unregister_socket(self)
+	if not ok then return nil, err, errcode end
+	return check(C.close(self.s) == 0)
 end
 
 local EWOULDBLOCK = 11 --alias of EAGAIN in Linux
@@ -811,10 +789,12 @@ do
 		return C.connect(self.s, ai.addr, ai.addrlen)
 	end, EINPROGRESS)
 
-	function socket:connect(...)
-		local ai, err = M.addr(...)
-		if not ai then
-			return false, err
+	function tcp:connect(host, port, addr_flags)
+		local ai, err, errcode = self:addr(host, port, addr_flags)
+		if not ai then return nil, err, errcode end
+		if not self._bound then
+			local ok, err, errcode = self:bind()
+			if not ok then return nil, err, errcode end
 		end
 		return connect(self, ai)
 	end
@@ -833,8 +813,10 @@ do
 	function tcp:accept()
 		local s, err, errno = tcp_accept(self)
 		if not s then return nil, err, errno end
-		return wrap(s, tcp, self.type, self.family, self.protocol,
-			self._st, self._af, self._prot), accept_buf
+		local s = wrap_socket(tcp, s, self._st, self._af, self._pr)
+		local ok, err, errcode = register_socket(s)
+		if not ok then return nil, err, errcode end
+		return s, accept_buf
 	end
 end
 
@@ -851,8 +833,8 @@ do
 		return C.sendto(self.s, buf, len or #buf, flags or 0, ai.addr, ai.addrlen)
 	end, EWOULDBLOCK)
 
-	function udp:send(buf, len, flags, ...)
-		local ai, err, errcode = M.addr(...)
+	function udp:send(buf, len, host, port, flags, addr_flags)
+		local ai, err, errcode = self:addr(host, port, addr_flags)
 		if not ai then return nil, err, errcode end
 		return udp_send(self, buf, len, flags, ai)
 	end
@@ -863,8 +845,8 @@ do
 		local ret = C.recvfrom(self.s, buf, len, flags or 0, ai.addr, ai.addrlen)
 	end, EWOULDBLOCK)
 
-	function udp:recv(buf, len, flags, ...)
-		local ai, err, errcode = M.addr(...)
+	function udp:recv(buf, len, host, port, flags, addr_flags)
+		local ai, err, errcode = self:addr(host, port, addr_flags)
 		if not ai then return nil, err, errcode end
 		return udp_recv(self, buf, len, flags, ai)
 	end
@@ -894,9 +876,10 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event);
 int epoll_wait(int epfd, struct epoll_event *events, int maxevents, int timeout);
 ]]
 
-local EPOLLIN        = 0x0001
-local EPOLLOUT       = 0x0004
-local EPOLLET        = 2^31
+local EPOLLIN  = 0x0001
+local EPOLLOUT = 0x0004
+local EPOLLERR = 0x0008
+local EPOLLET  = 2^31
 
 local EPOLL_CTL_ADD = 1
 local EPOLL_CTL_DEL = 2
@@ -932,15 +915,23 @@ do
 		sockets[i] = s
 		local e = ffi.new'struct epoll_event'
 		e.data.u32 = i
-		e.events = EPOLLIN + EPOLLOUT + EPOLLET
-		assert(check(C.epoll_ctl(M.epoll_fd(), EPOLL_CTL_ADD, s.s, e) == 0))
+		e.events = EPOLLIN + EPOLLOUT + EPOLLERR + EPOLLET
+		return check(C.epoll_ctl(M.epoll_fd(), EPOLL_CTL_ADD, s.s, e) == 0)
 	end
 
+	local ENOENT = 2
+
 	--[[local]] function unregister_socket(s)
-		assert(check(C.epoll_ctl(M.epoll_fd(), EPOLL_CTL_DEL, s.s, s._e) == 0))
 		local i = s._i
+		if not i then return true end --closing before bind() was called.
+		local ok = C.epoll_ctl(M.epoll_fd(), EPOLL_CTL_DEL, s.s, s._e) == 0
+		--epoll removed the fd if connection was closed so ENOENT is normal.
+		if not ok and ffi.errno() ~= ENOENT then
+			return check()
+		end
 		sockets[i] = false
 		push(free_indices, i)
+		return true
 	end
 
 	local function resume(socket, e, event, thread_field)
@@ -995,13 +986,18 @@ ffi.cdef[[
 int bind(SOCKET s, const sockaddr*, int namelen);
 ]]
 
-function socket:bind(...)
-	local ai, err, errcode = M.addr(...)
-	if not ai then return false, err, errcode end
+function socket:bind(host, port, addr_flags)
+	assert(not self._bound)
+	local ai, err, errcode = self:addr(host, port, addr_flags)
+	if not ai then return nil, err, errcode end
 	local ok = C.bind(self.s, ai.addr, ai.addrlen) == 0
 	if not err then ai:free() end
 	if not ok then return check() end
 	self._bound = true
+	--epoll_ctl() must be called after bind() for some reason.
+	if register_socket then
+		return register_socket(self)
+	end
 	return true
 end
 
@@ -1011,14 +1007,32 @@ ffi.cdef[[
 int listen(SOCKET s, int backlog);
 ]]
 
-function tcp:listen(backlog)
-	return check(C.listen(self.s, backlog or 0x7fffffff) == 0)
+function tcp:listen(backlog, host, port, addr_flags)
+	if type(backlog) ~= 'number' then
+		backlog, host, port = 1/0, backlog, host
+	end
+	if not self._bound then
+		self:bind(host, port, addr_flags)
+	end
+	backlog = glue.clamp(backlog or 1/0, 0, 0x7fffffff)
+	local ok = C.listen(self.s, backlog) == 0
+	if not ok then return check() end
+	return true
 end
 
---inherit socket -------------------------------------------------------------
+--hi-level API ---------------------------------------------------------------
+
+--[[local]] function wrap_socket(class, s, st, af, pr)
+	local s = {s = s, __index = class, _st = st, _af = af, _pr = pr}
+	return setmetatable(s, s)
+end
+function M.tcp(...) return create_socket(tcp, 'tcp', ...) end
+function M.udp(...) return create_socket(udp, 'udp', ...) end
+function M.raw(...) return create_socket(raw, 'raw', ...) end
 
 glue.update(tcp, socket)
 glue.update(udp, socket)
+glue.update(raw, socket)
 
 --coroutine-based scheduler --------------------------------------------------
 
@@ -1040,7 +1054,7 @@ function M.newthread(handler, ...)
 		coro.transfer(loop_thread)
 	end)
 	local real_loop_thread = loop_thread
-	local loop_thread = coro.running() --make it get back here.
+	loop_thread = coro.running() --make it get back here.
 	coro.transfer(thread, ...)
 	loop_thread = real_loop_thread
 	return thread

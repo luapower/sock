@@ -8,28 +8,32 @@ on Windows, epoll on Linux and kqueue on OSX.
 
 ------------------------------------------------- ----------------------------
 __address lookup__
-`socket.addr(ai_args...) -> ai`                   look-up a hostname
+`socket.addr(...) -> ai`                          look-up a hostname
 `ai:free()`                                       free the address list
 `ai:next() -> ai|nil`                             get next address in list
-`ai:addresses() -> iter() -> ai`                  iterate addresses
-`ai.socket_type -> s`                             'udp' or 'tcp'
-`ai.family -> s`                                  'inet', 'inet6' or 'unix'
-`ai.protocol -> s`                                'ip'
-`ai.name -> s`                                    cannonical name
-`ai.addr:tostring() -> s`                         formatted address
+`ai:addrs() -> iter() -> ai`                      iterate addresses
+`ai:type() -> s`                                  socket type: 'tcp', ...
+`ai:family() -> s`                                address family: 'inet', ...
+`ai:protocol() -> s`                              protocol: 'tcp', 'icmp', ...
+`ai:name() -> s`                                  cannonical name
+`ai:tostring() -> s`                              formatted address
 __sockets__
-`socket.tcp(['inet'|'inet6'], ['ip']) -> tcp`     make a TCP socket
-`socket.udp(['inet'|'inet6'], ['ip']) -> udp`     make a UDP socket
+`socket.tcp([family][, protocol]) -> tcp`         make a TCP socket
+`socket.udp([family][, protocol]) -> udp`         make a UDP socket
+`socket.raw([family][, protocol]) -> raw`         make a RAW socket
+`s:type() -> s`                                   socket type
+`s:family() -> s`                                 address family
+`s:protocol() -> s`                               protocol
 `s:close()`                                       close connection and free socket
-`s:bind(ai_args...)`                              bind socket to IP/port
+`s:bind(addr | host,port)`                        bind socket to IP/port
 __TCP sockets__
-`tcp:listen([backlog])`                           put socket in listening mode
-`tcp:connect(ai_args...)`                         connect
+`tcp:listen(host, port, [backlog])`               put socket in listening mode
+`tcp:connect(addr | host,port)`                   connect
 `tcp:send(buf, maxlen) -> len`                    send bytes
 `tcp:recv(buf, maxlen) -> len`                    receive bytes
 __UDP sockets__
-`udp:send(buf, maxlen, ai_args...) -> len`        send a datagram to an address
-`udp:recv(buf, maxlen, ai_args...) -> len`        receive a datagram from an adress
+`udp:send(buf, maxlen, addr | host,port) -> len`  send a datagram to an address
+`udp:recv(buf, maxlen, addr | host,port) -> len`  receive a datagram from an adress
 __polling__
 `socket.poll(timeout) -> true | false,'timeout'`  poll for I/O
 `socket.start(timeout) -> true`                   keep polling until timeout
@@ -45,40 +49,59 @@ I/O functions only work inside threads created with `socket.newthread()`.
 
 ## Address lookup
 
-### `socket.addr(ai_args...) -> ai`
+### `socket.addr(...) -> ai`
 
-`ai_args` cam be either:
+The args can be either an existing `ai` object which is passed through, or:
 
-  * `[host], [port|service], ['tcp'|'udp'], ['inet'|'inet6'|'unix'], ['ip'], [flags]`
-  * or an existing `ai` object.
+  * `[host], [port], socket_type, [family], [protocol], [flags]`
+
+where
+
+  * `host` can be a hostname, ip address, `'*'` (the default) which means
+  `'0.0.0.0'` aka "all interfaces" or `false` which means `'127.0.0.1'`.
+  * `port` can be a port number or a service name and defaults to `0`
+  which means "any available port".
+  * `socket_type` must be `'tcp'`, `'udp'` or `'raw'`.
+  * `family` can be `'inet'`, `'inet6'` or `'unix'` (defaults to `'inet'`).
+  * `protocol` can be `'ip'`, `'ipv6'`, `'tcp'`, `'udp'`, `'raw'`, `'icmp'`,
+  `'igmp'` or `'icmpv6'` (default is based on socket type).
+  * flags are a [glue.bor()][glue] list of `passive`, `cannonname`,
+    `numerichost`, `numericserv`, `all`, `v4mapped`, `addrconfig`
+    which map to `getaddrinfo()` flags.
 
 ## Sockets
 
-### `socket.tcp(['inet'|'inet6'|'unix'], ['ip']) -> tcp`
+### `socket.tcp([family][, protocol]) -> tcp`
 
 Make a TCP socket.
 
-### `socket.udp(['inet'|'inet6'|'unix'], ['ip']) -> udp`
+### `socket.udp([family][, protocol]) -> udp`
 
 Make an UDP socket.
+
+### `socket.raw([family][, protocol]) -> raw`
+
+Make a RAW socket.
 
 ### `s:close()`
 
 Close the connection and free the socket.
 
-### `s:bind(ai_args...) -> true`
+### `s:bind(addr | [host],[port]) -> true`
 
-Bind socket to an ip/port.
+Bind socket to an interface/port.
 
 ## TCP sockets
 
-### `tcp:listen(ai_args...) -> true`
+### `tcp:listen([backlog, ]addr | [host],[port]) -> true`
 
-Put the socket in listening mode.
+Put the socket in listening mode, binding the socket if not bound already
+(in which case `host` and `port` args are ignored). The `backlog` defaults
+to `1/0` which means "use the maximum allowed".
 
-### `tcp:connect(ai_args...) -> true`
+### `tcp:connect(addr | host,port) -> true`
 
-Connect to an address.
+Connect to an address, binding the socket to `'*'` if not bound already.
 
 ### `tcp:send(buf, maxlen) -> len`
 
@@ -90,11 +113,11 @@ Receive bytes.
 
 ## UDP sockets
 
-### `udp:send(buf, maxlen, ai_args...) -> len`
+### `udp:send(buf, maxlen, addr | host,port) -> len`
 
 Send a datagram.
 
-### `udp:recv(buf, maxlen, ai_args...) -> len`
+### `udp:recv(buf, maxlen, addr | host,port) -> len`
 
 Receive a datagram.
 
@@ -103,6 +126,9 @@ Receive a datagram.
 ### `socket.poll(timeout) -> true | false,'timeout' | nil,err,errcode`
 
 Poll for the next I/O event and resume the coroutine that waits for it.
+
+Timeout is in seconds with anything beyond 2^31-1 taken as infinte
+and defaults to infinite.
 
 ### `socket.start(timeout) -> true | nil,err,errcode`
 
