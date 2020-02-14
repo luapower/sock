@@ -37,7 +37,7 @@ local function str(s, len)
 	return ffi.string(s, len)
 end
 
---all/sockaddr construction --------------------------------------------------
+--getaddrinfo() --------------------------------------------------------------
 
 ffi.cdef[[
 struct sockaddr_in {
@@ -267,15 +267,35 @@ do
 
 end
 
---Windows/IOCP ---------------------------------------------------------------
+--Winsock2 & IOCP ------------------------------------------------------------
 
 if Windows then
 
-require'winapi.types'
-
 ffi.cdef[[
 
-typedef uintptr_t SOCKET;
+// required types from `winapi.types` ----------------------------------------
+
+typedef unsigned long   ULONG;
+typedef unsigned long   DWORD;
+typedef int             BOOL;
+typedef unsigned short  WORD;
+typedef BOOL            *LPBOOL;
+typedef int             *LPINT;
+typedef DWORD           *LPDWORD;
+typedef void            VOID;
+typedef VOID            *LPVOID;
+typedef const VOID      *LPCVOID;
+typedef uint64_t ULONG_PTR, *PULONG_PTR;
+typedef VOID            *PVOID;
+typedef char            CHAR;
+typedef CHAR            *LPSTR;
+typedef VOID            *HANDLE;
+typedef struct _GUID {
+    unsigned long  Data1;
+    unsigned short Data2;
+    unsigned short Data3;
+    unsigned char  Data4[8];
+} GUID, *LPGUID;
 
 // IOCP ----------------------------------------------------------------------
 
@@ -303,6 +323,7 @@ BOOL GetQueuedCompletionStatus(
 
 // Sockets -------------------------------------------------------------------
 
+typedef uintptr_t SOCKET;
 typedef HANDLE WSAEVENT;
 typedef unsigned int GROUP;
 
@@ -720,7 +741,7 @@ end
 
 end --if Windows
 
---POSIX/berkley sockets ------------------------------------------------------
+--POSIX sockets --------------------------------------------------------------
 
 local register_socket, unregister_socket --fw. decl.
 
@@ -734,6 +755,7 @@ int accept4(int s, struct sockaddr *addr, int *addrlen, int flags);
 int close(int s);
 int connect(int s, const struct sockaddr *name, int namelen);
 int ioctl(int s, long cmd, unsigned long *argp, ...);
+int setsockopt(int sockfd, int level, int optname, const void *optval, unsigned int optlen);
 int recv(int s, char *buf, int len, int flags);
 int recvfrom(int s, char *buf, int len, int flags, struct sockaddr *from, int *fromlen);
 int send(int s, const char *buf, int len, int flags);
@@ -854,7 +876,7 @@ end
 
 end --if not Windows
 
---Linux/epoll ----------------------------------------------------------------
+--epoll ----------------------------------------------------------------------
 
 if Linux then
 
@@ -966,7 +988,7 @@ end
 
 end --if Linux
 
---OSX/kqueue -----------------------------------------------------------------
+--kqueue ---------------------------------------------------------------------
 
 if OSX then
 
@@ -980,7 +1002,7 @@ int kevent(int kq, const struct kevent *changelist, int nchanges,
 
 end --if OSX
 
---all/binding ----------------------------------------------------------------
+--bind() ---------------------------------------------------------------------
 
 ffi.cdef[[
 int bind(SOCKET s, const sockaddr*, int namelen);
@@ -1001,7 +1023,7 @@ function socket:bind(host, port, addr_flags)
 	return true
 end
 
---all/listen -----------------------------------------------------------------
+--listen() -------------------------------------------------------------------
 
 ffi.cdef[[
 int listen(SOCKET s, int backlog);
