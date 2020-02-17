@@ -922,9 +922,9 @@ do
 end
 
 do
-	local sockets = {}
-	local free_indices = {}
-	local n = 0
+	local sockets = {} --{s1, ...}
+	local free_indices = {} --{i1, ...}
+	local n = 0 --#sockets
 
 	--[[local]] function register_socket(s)
 		local i = pop(free_indices)
@@ -1065,9 +1065,6 @@ local loop_thread
 	return coro.transfer(loop_thread)
 end
 
---create a thread set up to transfer control to the loop thread on finish,
---and run it. return it while suspended in the first async socket call.
---poll() will resume it back afterwards by calling the job's done() method.
 function M.newthread(handler, ...)
 	--wrap handler so that it terminates in current loop_thread.
 	local thread = coro.create(function(...)
@@ -1076,7 +1073,7 @@ function M.newthread(handler, ...)
 		coro.transfer(loop_thread)
 	end)
 	local real_loop_thread = loop_thread
-	loop_thread = coro.running() --make it get back here.
+	loop_thread = coro.running() --make it get back here the first time.
 	coro.transfer(thread, ...)
 	loop_thread = real_loop_thread
 	return thread

@@ -4,6 +4,15 @@
 Portable coroutine-based async socket API. For scheduling it uses IOCP
 on Windows, epoll on Linux and kqueue on OSX.
 
+## Status
+
+<warn>Work in progress</warn>
+
+The plan here is to create a new ffi-based networking stack for LuaJIT based
+on [socket2], [coro], [http] and a TLS module binding to [openssl] that will
+replace [socket], [luasec], [socketloop], [nginx], [libcurl].
+
+
 ## API
 
 ------------------------------------------------- ----------------------------
@@ -34,11 +43,12 @@ __TCP sockets__
 __UDP sockets__
 `udp:send(buf, maxlen, addr | host,port) -> len`  send a datagram to an address
 `udp:recv(buf, maxlen, addr | host,port) -> len`  receive a datagram from an adress
-__polling__
+__scheduling__
+`socket.newthread(func) -> co`                    create a coroutine for async I/O
 `socket.poll(timeout) -> true | false,'timeout'`  poll for I/O
-`socket.start(timeout) -> true`                   keep polling until timeout
+`socket.start(timeout)`                           keep polling until timeout
 `socket.stop()`                                   stop polling
-__threading__
+__multi-threading__
 `socket.iocp([iocp_h]) -> iocp_h`                 get/set IOCP handle (Windows)
 `socket.epoll_fd([epfd]) -> epfd`                 get/set epoll fd (Linux)
 ------------------------------------------------- ----------------------------
@@ -87,19 +97,19 @@ Make a RAW socket.
 
 Close the connection and free the socket.
 
-### `s:bind(addr | [host],[port]) -> true`
+### `s:bind(addr | [host],[port])`
 
 Bind socket to an interface/port.
 
 ## TCP sockets
 
-### `tcp:listen([backlog, ]addr | [host],[port]) -> true`
+### `tcp:listen([backlog, ]addr | [host],[port])`
 
 Put the socket in listening mode, binding the socket if not bound already
 (in which case `host` and `port` args are ignored). The `backlog` defaults
 to `1/0` which means "use the maximum allowed".
 
-### `tcp:connect(addr | host,port) -> true`
+### `tcp:connect(addr | host,port)`
 
 Connect to an address, binding the socket to `'*'` if not bound already.
 
@@ -121,16 +131,29 @@ Send a datagram.
 
 Receive a datagram.
 
-## Polling
+## Scheduling
 
-### `socket.poll(timeout) -> true | false,'timeout' | nil,err,errcode`
+Scheduling is based on synchronous coroutines provided by [coro] which
+allows coroutine-based iterators that perform socket I/O to be written.
+
+### `socket.newthread(func) -> co`
+
+Create a coroutine for performing async I/O. The coroutine starts immediately
+and transfers control back to the _parent thread_ inside the first async
+I/O operation. When the coroutine finishes, the control is transfered to
+the loop thread.
+
+Full-duplex I/O on a socket can be achieved by performing reads in one thread
+and all writes in another.
+
+### `socket.poll(timeout) -> true | false,'timeout'`
 
 Poll for the next I/O event and resume the coroutine that waits for it.
 
 Timeout is in seconds with anything beyond 2^31-1 taken as infinte
 and defaults to infinite.
 
-### `socket.start(timeout) -> true | nil,err,errcode`
+### `socket.start(timeout)`
 
 Start polling. Stops after the timeout expires and there's no more I/O
 or `stop()` was called.
@@ -139,14 +162,16 @@ or `stop()` was called.
 
 Tell the loop to stop dequeuing and return.
 
-## Threading
+## Multi-threading
 
 ### `socket.iocp([iocp_handle]) -> iocp_handle`
 
 Get/set the global IOCP handle (Windows).
 
-IOCPs can be shared between threads and having a single IOCP for all
-threads is more efficient for the kernel than having one IOCP per thread.
+IOCPs can be shared between OS threads and having a single IOCP for all
+threads (as opposed to having one IOCP per thread/Lua state) enables the
+kernel to better distribute the completion events between threads.
+
 To share the IOCP with another Lua state running on a different thread,
 get the IOCP handle with `socket.iocp()`, copy it over to the other state,
 then set it with `socket.iocp(copied_iocp)`.
@@ -155,8 +180,10 @@ then set it with `socket.iocp(copied_iocp)`.
 
 Get/set the global epoll fd (Linux).
 
-Epoll fds can be shared between threads and having a single epfd for all
+Epoll fds can be shared between OS threads and having a single epfd for all
 threads is more efficient for the kernel than having one epfd per thread.
+
+
 To share the epfd with another Lua state running on a different thread,
 get the epfd with `socket.epoll_fd()`, copy it over to the other state,
 then set it with `socket.epoll_fd(copied_epfd)`.
