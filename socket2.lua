@@ -723,7 +723,6 @@ do
 		local o, job = overlapped(io_done)
 		flagsbuf[0] = 0
 		local ok = C.WSARecv(self.s, wsabuf, 1, nbuf, flagsbuf, o, nil) == 0
-		print('recv', nbuf[0])
 		return check_pending(ok, job)
 	end
 
