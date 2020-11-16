@@ -22,7 +22,7 @@ assert(Windows or Linux or OSX, 'unsupported platform')
 local C = Windows and ffi.load'ws2_32' or ffi.C
 local M = {C = C}
 
-local socket = {} --common socket methods
+local socket = {issocket = true} --common socket methods
 local tcp = {} --methods of tcp sockets
 local udp = {} --methods of udp sockets
 local raw = {} --methods of raw sockets
@@ -723,6 +723,7 @@ do
 		local o, job = overlapped(io_done)
 		flagsbuf[0] = 0
 		local ok = C.WSARecv(self.s, wsabuf, 1, nbuf, flagsbuf, o, nil) == 0
+		print('recv', nbuf[0])
 		return check_pending(ok, job)
 	end
 
@@ -1077,6 +1078,21 @@ function M.newthread(handler, ...)
 	coro.transfer(thread, ...)
 	loop_thread = real_loop_thread
 	return thread
+end
+
+M.thread = coro.running
+
+function M.suspend()
+	return coro.transfer(loop_thread)
+end
+
+function M.resume(thread, ...)
+	local loop_thread0 = loop_thread
+	--change loop_thread temporarily so that we get back here
+	--on the first call to suspend().
+	loop_thread = coro.running()
+	coro.transfer(thread, ...)
+	loop_thread = loop_thread0
 end
 
 local stop = false

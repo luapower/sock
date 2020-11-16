@@ -4,13 +4,20 @@
 Portable coroutine-based async socket API. For scheduling it uses IOCP
 on Windows, epoll on Linux and kqueue on OSX.
 
+## Rationale
+
+Replace LuaSocket which doesn't scale being select()-based, and improve on
+other aspects too (single file, nothing to compile, use cdata buffers instead
+of strings, don't bundle undelated modules, [coro]-based async only, support
+multi-threading).
+
 ## Status
 
 <warn>Work in progress</warn>
 
 The plan here is to create a new ffi-based networking stack for LuaJIT based
-on [socket2], [coro], [http] and a TLS module binding to [openssl] that will
-replace [socket], [luasec], [socketloop], [nginx], [libcurl].
+on [socket2], [coro], [http], [bearssl], [libtls_bearssl] to replace the
+current stack based on [socket], [luasec], [socketloop], [nginx], [libcurl].
 
 
 ## API
