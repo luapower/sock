@@ -106,7 +106,6 @@ function stcp:send(buf, sz)
 end
 
 function stcp:close()
-	print('CLOSING')
 	local ret, err = self.tls:close()
 	self.tcp:close()
 	self.tls:free()
