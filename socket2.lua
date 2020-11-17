@@ -616,6 +616,9 @@ do
 	local WAIT_TIMEOUT = 258
 
 	function M.poll(timeout)
+		if #freed == #jobs then
+			return false, 'empty'
+		end
 		timeout = math.max((timeout or 1/0) * 1000, 0)
 		--we're going infinite after 0x7fffffff for compat. with Linux.
 		if timeout > 0x7fffffff then timeout = 0xffffffff end
@@ -745,6 +748,8 @@ end --if Windows
 
 local register_socket, unregister_socket --fw. decl.
 
+local wait_count = 0
+
 if Linux or OSX then
 
 ffi.cdef[[
@@ -799,7 +804,9 @@ local function make_async(thread_field, f, wait_errno)
 		if ret >= 0 then return ret end
 		if ffi.errno() == wait_errno then
 			self[thread_field] = coro.running()
+			wait_count = wait_count + 1
 			wait()
+			wait_count = wait_count - 1
 			goto again
 		end
 		return check()
@@ -924,14 +931,9 @@ end
 do
 	local sockets = {} --{s1, ...}
 	local free_indices = {} --{i1, ...}
-	local n = 0 --#sockets
 
 	--[[local]] function register_socket(s)
-		local i = pop(free_indices)
-		if not i then
-			n = n + 1
-			i = n
-		end
+		local i = pop(free_indices) or #sockets + 1
 		s._i = i
 		s._e = e
 		sockets[i] = s
@@ -967,6 +969,9 @@ do
 	local maxevents = 1
 	local events = ffi.new('struct epoll_event[?]', maxevents)
 	function M.poll(timeout)
+		if wait_count == 0 then
+			return false, 'empty'
+		end
 		timeout = math.max((timeout or 1/0) * 1000, 0)
 		if timeout > 0x7fffffff then timeout = -1 end --infinite
 		local n = C.epoll_wait(M.epoll_fd(), events, maxevents, timeout)
@@ -1100,7 +1105,13 @@ function M.start(timeout)
 	loop_thread = coro.running()
 	repeat
 		local ret, err, errcode = M.poll(timeout)
-		if not ret then return ret, err, errcode end
+		if not ret then
+			if err == 'empty' then
+				M.stop()
+			else
+				return ret, err, errcode
+			end
+		end
 	until stop
 	return true
 end

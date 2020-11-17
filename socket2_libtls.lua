@@ -82,30 +82,31 @@ local function checkio(self, tls_ret, tls_err, tls_errcode)
 		buf = buf + tcp_len
 		sz  = sz  - tcp_len
 	end
-	return 0 --signal retry
+	return 'retry'
 end
 
 function stcp:recv(buf, sz)
-	local len, err, errcode
 	cb_r_buf, cb_r_sz = nil
 	cb_w_buf, cb_w_sz = nil
+	local len, err, errcode
 	repeat
 		len, err, errcode = checkio(self, self.tls:recv(buf, sz))
-	until len ~= 0
+	until len ~= 'retry'
 	return len, err, errcode
 end
 
 function stcp:send(buf, sz)
-	local len, err, errcode
 	cb_r_buf, cb_r_sz = nil
 	cb_w_buf, cb_w_sz = nil
+	local len, err, errcode
 	repeat
 		len, err, errcode = checkio(self, self.tls:send(buf, sz))
-	until len ~= 0
+	until len ~= 'retry'
 	return len, err, errcode
 end
 
 function stcp:close()
+	print('CLOSING')
 	local ret, err = self.tls:close()
 	self.tcp:close()
 	self.tls:free()
