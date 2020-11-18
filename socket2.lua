@@ -353,6 +353,22 @@ int WSAStartup(WORD wVersionRequested, LPWSADATA lpWSAData);
 int WSACleanup(void);
 int WSAGetLastError();
 
+int getsockopt(
+	SOCKET s,
+	int    level,
+	int    optname,
+	char   *optval,
+	int    *optlen
+);
+
+int setsockopt(
+	SOCKET     s,
+	int        level,
+	int        optname,
+	const char *optval,
+	int        optlen
+);
+
 typedef struct _WSABUF {
 	ULONG len;
 	CHAR  *buf;
@@ -564,6 +580,162 @@ do
 
 		return wrap_socket(class, s, st, af, pr)
 	end
+end
+
+do
+	local OPT = {
+		so_acceptconn         = 0x0002, -- socket has had listen()
+		so_broadcast          = 0x0020, -- permit sending of broadcast msgs
+		so_bsp_state          = 0x1009, -- get socket 5-tuple state
+		so_conditional_accept = 0x3002, -- enable true conditional accept (see msdn)
+		so_connect_time       = 0x700C, -- number of seconds a socket has been connected
+		so_dontlinger         = bit.bnot(0x0080),
+		so_dontroute          = 0x0010, -- just use interface addresses
+		so_error              = 0x1007, -- get error status and clear
+		so_exclusiveaddruse   = bit.bnot(0x0004), -- disallow local address reuse
+		so_keepalive          = 0x0008, -- keep connections alive
+		so_linger             = 0x0080, -- linger on close if data present
+		so_max_msg_size       = 0x2003, -- maximum message size for UDP
+		so_maxdg              = 0x7009,
+		so_maxpathdg          = 0x700a,
+		so_oobinline          = 0x0100, -- leave received oob data in line
+		so_pause_accept       = 0x3003, -- pause accepting new connections
+		so_port_scalability   = 0x3006, -- enable port scalability
+		so_protocol_info      = 0x2005, -- wsaprotocol_infow structure
+		so_randomize_port     = 0x3005, -- randomize assignment of wildcard ports
+		so_rcvbuf             = 0x1002, -- receive buffer size
+		so_rcvlowat           = 0x1004, -- receive low-water mark
+		so_rcvtimeo           = 0x1006, -- receive timeout
+		so_reuseaddr          = 0x0004, -- allow local address reuse
+		so_sndbuf             = 0x1001, -- send buffer size
+		so_sndlowat           = 0x1003, -- send low-water mark
+		so_sndtimeo           = 0x1005, -- send timeout
+		so_type               = 0x1008, -- get socket type
+		so_update_accept_context  = 0x700b,
+		so_update_connect_context = 0x7010,
+		so_useloopback        = 0x0040, -- bypass hardware when possible
+
+		tcp_nodelay           = 0x0001,
+		tcp_bdsurgent         = 0x7000,
+		tcp_expedited_1122  	 = 0x0002,
+		tcp_keepalive       	     =  3,
+		tcp_maxseg          	     =  4,
+		tcp_maxrt           	     =  5,
+		tcp_stdurg          	     =  6,
+		tcp_nourg           	     =  7,
+		tcp_atmark          	     =  8,
+		tcp_nosynretries    	     =  9,
+		tcp_timestamps      	     = 10,
+		tcp_offload_preference	  = 11,
+		tcp_congestion_algorithm  = 12,
+		tcp_delay_fin_ack         = 13,
+	}
+
+	local function get_bool()
+
+	end
+
+	local function get_int()
+
+	end
+
+	local function get_uint()
+
+	end
+
+	local function set_bool(v) --BOOL aka DWORD
+
+	end
+
+	local function set_int(v)
+
+	end
+
+	local function set_uint(v)
+
+	end
+
+	local function nyi() error'NYI' end
+	local get_protocol_info = nyi
+	local set_linger = nyi
+	local get_csaddr_info = nyi
+
+	local get_opt = {
+		so_acceptconn         = get_bool,
+		so_broadcast          = get_bool,
+		so_bsp_state          = get_csaddr_info,
+		so_conditional_accept = get_bool,
+		so_connect_time       = get_uint,
+		so_dontlinger         = get_bool,
+		so_dontroute          = get_bool,
+		so_error              = get_uint,
+		so_exclusiveaddruse   = get_bool,
+		so_keepalive          = get_bool,
+		so_linger             = get_linger,
+		so_max_msg_size       = get_uint,
+		so_maxdg              = get_uint,
+		so_maxpathdg          = get_uint,
+		so_oobinline          = get_bool,
+		so_pause_accept       = get_bool,
+		so_port_scalability   = get_bool,
+		so_protocol_info      = get_protocol_info,
+		so_randomize_port     = get_uint16,
+		so_rcvbuf             = get_uint,
+		so_rcvlowat           = get_uint,
+		so_rcvtimeo           = get_uint,
+		so_reuseaddr          = get_bool,
+		so_sndbuf             = get_uint,
+		so_sndlowat           = get_uint,
+		so_sndtimeo           = get_uint,
+		so_type               = get_uint,
+	}
+
+	local set_opt = {
+		so_broadcast          = set_bool,
+		so_conditional_accept = set_bool,
+		so_dontlinger         = set_bool,
+		so_dontroute          = set_bool,
+		so_exclusiveaddruse   = set_bool,
+		so_keepalive          = set_bool,
+		so_linger             = set_linger,
+		so_max_msg_size       = set_uint,
+		so_oobinline          = set_bool,
+		so_pause_accept       = set_bool,
+		so_port_scalability   = set_bool,
+		so_randomize_port     = set_uint16,
+		so_rcvbuf             = set_uint,
+		so_rcvlowat           = set_uint,
+		so_rcvtimeo           = set_uint,
+		so_reuseaddr          = set_bool,
+		so_sndbuf             = set_uint,
+		so_sndlowat           = set_uint,
+		so_sndtimeo           = set_uint,
+		so_update_accept_context  = set_bool,
+		so_update_connect_context = set_bool,
+	}
+
+	local function parse_opt(k)
+		local opt = assert(OPT[k], 'invalid socket option')
+		local level = k:find('tcp_', 1, true) and 6 or 0xffff
+		return opt, level
+	end
+
+	function socket:getopt(k)
+		local opt, level = parse_opt(k)
+		local get = assert(get_opt[k], 'write-only socket option')
+		local buf, sz --TODO
+		local ok, err = check(C.getsockopt(self.s, level, opt, buf, sz))
+		if not ok then return nil, err end
+		return get(buf, sz)
+	end
+
+	function socket:setopt(k, v)
+		local opt, level = parse_opt(k)
+		local set = assert(set_opt[k], 'read-only socket option')
+		local buf, sz = set(v)
+		return check(C.setsockopt(self.s, level, opt, buf, sz))
+	end
+
 end
 
 function socket:close()
