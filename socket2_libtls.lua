@@ -46,7 +46,7 @@ function M.new(tcp, opt)
 	end
 	local ok, err
 	if client then
-		ok, err = tls:connect(vhost, read_cb, write_cb)
+		ok, err = tls:connect(opt.servername, read_cb, write_cb)
 	else
 		--TODO
 		ok, err = tls:accept(cctx, read_cb, write_cb)

@@ -13,10 +13,10 @@ multi-threading).
 
 ## Status
 
-<warn>Work in progress</warn>
+<warn>Alpha (Windows & Linux)</warn>
 
 The plan here is to create a new ffi-based networking stack for LuaJIT based
-on [socket2], [coro], [http], [bearssl], [libtls_bearssl] to replace the
+on [socket2], [coro], [http], [bearssl], [libtls], [libtls_bearssl] to replace the
 current stack based on [socket], [luasec], [socketloop], [nginx], [libcurl].
 
 
