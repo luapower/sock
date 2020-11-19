@@ -9,6 +9,7 @@ local bit = require'bit'
 
 local glue = require'glue'
 local coro = require'coro'
+local valueheap = require'heap'.valueheap
 
 local push = table.insert
 local pop = table.remove
@@ -583,7 +584,7 @@ do
 end
 
 do
-	local OPT = {
+	local OPT = { --Windows 7 options only
 		so_acceptconn         = 0x0002, -- socket has had listen()
 		so_broadcast          = 0x0020, -- permit sending of broadcast msgs
 		so_bsp_state          = 0x1009, -- get socket 5-tuple state
@@ -614,45 +615,45 @@ do
 		so_update_accept_context  = 0x700b,
 		so_update_connect_context = 0x7010,
 		so_useloopback        = 0x0040, -- bypass hardware when possible
-
-		tcp_nodelay           = 0x0001,
-		tcp_bdsurgent         = 0x7000,
+		tcp_bsdurgent         = 0x7000,
 		tcp_expedited_1122  	 = 0x0002,
-		tcp_keepalive       	     =  3,
-		tcp_maxseg          	     =  4,
-		tcp_maxrt           	     =  5,
-		tcp_stdurg          	     =  6,
-		tcp_nourg           	     =  7,
-		tcp_atmark          	     =  8,
-		tcp_nosynretries    	     =  9,
-		tcp_timestamps      	     = 10,
-		tcp_offload_preference	  = 11,
-		tcp_congestion_algorithm  = 12,
-		tcp_delay_fin_ack         = 13,
+		tcp_maxrt           	 =      5,
+		tcp_nodelay           = 0x0001,
+		tcp_timestamps      	 =     10,
 	}
 
-	local function get_bool()
+	local function get_bool   (buf) return buf.u == 1 end
+	local function get_int    (buf) return buf.i end
+	local function get_uint   (buf) return buf.u end
+	local function get_uint16 (buf) return buf.u16 end
 
-	end
-
-	local function get_int()
-
-	end
-
-	local function get_uint()
-
-	end
+	local buf = ffi.new[[
+		union {
+			char     c[4];
+			uint32_t u;
+			uint16_t u16;
+			int32_t  i;
+		}
+	]]
 
 	local function set_bool(v) --BOOL aka DWORD
-
+		buf.u = v
+		return buf.c, 4
 	end
 
 	local function set_int(v)
-
+		buf.i = v
+		return buf.c, 4
 	end
 
 	local function set_uint(v)
+		buf.u = v
+		return buf.c, 4
+	end
 
+	local function set_uint16(v)
+		buf.u16 = v
+		return buf.c, 2
 	end
 
 	local function nyi() error'NYI' end
@@ -688,6 +689,11 @@ do
 		so_sndlowat           = get_uint,
 		so_sndtimeo           = get_uint,
 		so_type               = get_uint,
+		tcp_bsdurgent         = get_bool,
+		tcp_expedited_1122  	 = get_bool,
+		tcp_maxrt           	 = get_uint,
+		tcp_nodelay           = get_bool,
+		tcp_timestamps      	 = get_bool,
 	}
 
 	local set_opt = {
@@ -712,6 +718,11 @@ do
 		so_sndtimeo           = set_uint,
 		so_update_accept_context  = set_bool,
 		so_update_connect_context = set_bool,
+		tcp_bsdurgent         = set_bool,
+		tcp_expedited_1122  	 = set_bool,
+		tcp_maxrt           	 = set_uint,
+		tcp_nodelay           = set_bool,
+		tcp_timestamps      	 = set_bool,
 	}
 
 	local function parse_opt(k)
@@ -723,8 +734,8 @@ do
 	function socket:getopt(k)
 		local opt, level = parse_opt(k)
 		local get = assert(get_opt[k], 'write-only socket option')
-		local buf, sz --TODO
-		local ok, err = check(C.getsockopt(self.s, level, opt, buf, sz))
+		local nbuf = ffi.new('int[1]', 4)
+		local ok, err = check(C.getsockopt(self.s, level, opt, buf.c, nbuf))
 		if not ok then return nil, err end
 		return get(buf, sz)
 	end
@@ -787,15 +798,19 @@ do
 
 	local WAIT_TIMEOUT = 258
 
-	function M.poll(timeout)
+	local expires_heap = valueheap{
+		cmp = function(job1, job2) return job1.expires < job2.expires end
+	}
+
+	function M.poll(max_timeout)
 		if #freed == #jobs then
 			return false, 'empty'
 		end
-		timeout = math.max((timeout or 1/0) * 1000, 0)
+		max_timeout = math.max((max_timeout or 1/0) * 1000, 0)
 		--we're going infinite after 0x7fffffff for compat. with Linux.
-		if timeout > 0x7fffffff then timeout = 0xffffffff end
+		if max_timeout > 0x7fffffff then max_timeout = 0xffffffff end
 		local ok = ffi.C.GetQueuedCompletionStatus(
-			M.iocp(), nbuf, keybuf, obuf, timeout) ~= 0
+			M.iocp(), nbuf, keybuf, obuf, max_timeout) ~= 0
 		local o = obuf[0]
 		if o == nil then
 			local err = C.WSAGetLastError()
@@ -806,10 +821,11 @@ do
 		end
 		local n = nbuf[0]
 		local job = free_overlapped(o)
+		local expires
 		if ok then
-			coro.transfer(job.thread, job:done(n))
+			expires = coro.transfer(job.thread, job:done(n))
 		else
-			coro.transfer(job.thread, check())
+			expires = coro.transfer(job.thread, check())
 		end
 		return true
 	end
@@ -818,10 +834,10 @@ end
 do
 	local WSA_IO_PENDING = 997
 
-	local function check_pending(ok, job)
+	local function check_pending(ok, job, expires)
 		if ok or C.WSAGetLastError() == WSA_IO_PENDING then
 			job.thread = coro.running()
-			return wait()
+			return wait(expires)
 		end
 		return check()
 	end
@@ -830,7 +846,7 @@ do
 		return true
 	end
 
-	function tcp:connect(host, port, addr_flags)
+	function tcp:connect(host, port, addr_flags, expires)
 		if not self._bound then
 			--ConnectEx requires binding first.
 			local ok, err, errcode = self:bind()
@@ -841,7 +857,7 @@ do
 		local o, job = overlapped(return_true)
 		local ok = ConnectEx(self.s, ai.addr, ai.addrlen, nil, 0, nil, o) == 1
 		if not err then ai:free() end
-		return check_pending(ok, job)
+		return check_pending(ok, job, expires)
 	end
 
 	local accept_buf_ct = ffi.typeof[[
@@ -854,12 +870,12 @@ do
 	]]
 	local accept_buf = accept_buf_ct()
 	local sa_len = ffi.sizeof(accept_buf) / 2
-	function tcp:accept()
+	function tcp:accept(expires)
 		local client_s, err, errcode = M.tcp(self._af, self._pr)
 		if not client_s then return nil, err, errcode end
 		local o, job = overlapped(return_true)
 		local ok = AcceptEx(self.s, client_s.s, accept_buf, 0, sa_len, sa_len, nbuf, o) == 1
-		local ok, err, errcode = check_pending(ok, job)
+		local ok, err, errcode = check_pending(ok, job, expires)
 		if not ok then return nil, err, errcode end
 		return client_s, accept_buf.remote_addr, accept_buf.local_addr
 	end
@@ -873,15 +889,15 @@ do
 		return n
 	end
 
-	function tcp:send(buf, len)
+	function tcp:send(buf, len, expires)
 		wsabuf.buf = type(buf) == 'string' and ffi.cast(pchar_t, buf) or buf
 		wsabuf.len = len or #buf
 		local o, job = overlapped(io_done)
 		local ok = C.WSASend(self.s, wsabuf, 1, nbuf, 0, o, nil) == 0
-		return check_pending(ok, job)
+		return check_pending(ok, job, expires)
 	end
 
-	function udp:send(buf, len, host, port, flags, addr_flags)
+	function udp:send(buf, len, host, port, expires, flags, addr_flags)
 		local ai, err, errcode = self:addr(host, port, addr_flags)
 		if not ai then return nil, err, errcode end
 		wsabuf.buf = type(buf) == 'string' and ffi.cast(pchar_t, buf) or buf
@@ -889,19 +905,19 @@ do
 		local o, job = overlapped(io_done)
 		local ok = C.WSASendTo(self.s, wsabuf, 1, nbuf, flags, ai.addr, ai.addrlen, o, nil) == 0
 		ai:free()
-		return check_pending(ok, job)
+		return check_pending(ok, job, expires)
 	end
 
-	function tcp:recv(buf, len)
+	function tcp:recv(buf, len, expires)
 		wsabuf.buf = buf
 		wsabuf.len = len
 		local o, job = overlapped(io_done)
 		flagsbuf[0] = 0
 		local ok = C.WSARecv(self.s, wsabuf, 1, nbuf, flagsbuf, o, nil) == 0
-		return check_pending(ok, job)
+		return check_pending(ok, job, expires)
 	end
 
-	function udp:recv(buf, len, host, port, flags, addr_flags)
+	function udp:recv(buf, len, host, port, expires, flags, addr_flags)
 		local ai, err, errcode = self:addr(host, port, addr_flags)
 		if not ai then return nil, err, errcode end
 		wsabuf.buf = buf
@@ -910,7 +926,7 @@ do
 		flagsbuf[0] = flags
 		local ok = C.WSARecvFrom(self.s, wsabuf, 1, nbuf, flagsbuf, ai.addr, ai.addrlen, o, nil) == 0
 		ai:free()
-		return check_pending(ok, job)
+		return check_pending(ok, job, expires)
 	end
 end
 
@@ -1237,9 +1253,9 @@ glue.update(raw, socket)
 
 local loop_thread
 
---[[local]] function wait()
+--[[local]] function wait(expires)
 	assert(coro.running() ~= loop_thread, 'trying to I/O from the main thread')
-	return coro.transfer(loop_thread)
+	return coro.transfer(loop_thread, expires)
 end
 
 function M.newthread(handler, ...)

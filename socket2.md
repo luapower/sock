@@ -42,6 +42,8 @@ __sockets__
 `s:protocol() -> s`                               protocol
 `s:close()`                                       close connection and free socket
 `s:bind(addr | host,port)`                        bind socket to IP/port
+`s:setopt(opt, val)`                              set socket option (`so_*` or `tcp_*`)
+`s:getopt(opt) -> val`                            get socket option
 __TCP sockets__
 `tcp:listen(host, port, [backlog])`               put socket in listening mode
 `tcp:connect(addr | host,port)`                   connect

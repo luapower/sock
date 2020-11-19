@@ -63,7 +63,7 @@ function M.new(tcp, opt)
 	return setmetatable(stcp, stcp)
 end
 
-local function checkio(self, tls_ret, tls_err, tls_errcode)
+local function checkio(self, expires, tls_ret, tls_err, tls_errcode)
 	local recv = tls_err == 'wantrecv'
 	local send = tls_err == 'wantsend'
 	local send_or_recv =
@@ -75,7 +75,7 @@ local function checkio(self, tls_ret, tls_err, tls_errcode)
 	local buf = recv and cb_r_buf or cb_w_buf
 	local sz  = recv and cb_r_sz  or cb_w_sz
 	while sz > 0 do
-		local tcp_len, tcp_err, tcp_errcode = send_or_recv(self.tcp, buf, sz)
+		local tcp_len, tcp_err, tcp_errcode = send_or_recv(self.tcp, buf, sz, expires)
 		if not tcp_len then
 			return tcp_len, tcp_err, tcp_errcode
 		end
@@ -85,22 +85,22 @@ local function checkio(self, tls_ret, tls_err, tls_errcode)
 	return 'retry'
 end
 
-function stcp:recv(buf, sz)
+function stcp:recv(buf, sz, expires)
 	cb_r_buf, cb_r_sz = nil
 	cb_w_buf, cb_w_sz = nil
 	local len, err, errcode
 	repeat
-		len, err, errcode = checkio(self, self.tls:recv(buf, sz))
+		len, err, errcode = checkio(self, expires, self.tls:recv(buf, sz))
 	until len ~= 'retry'
 	return len, err, errcode
 end
 
-function stcp:send(buf, sz)
+function stcp:send(buf, sz, expires)
 	cb_r_buf, cb_r_sz = nil
 	cb_w_buf, cb_w_sz = nil
 	local len, err, errcode
 	repeat
-		len, err, errcode = checkio(self, self.tls:send(buf, sz))
+		len, err, errcode = checkio(self, expires, self.tls:send(buf, sz))
 	until len ~= 'retry'
 	return len, err, errcode
 end

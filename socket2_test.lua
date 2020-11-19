@@ -2,6 +2,7 @@
 io.stdout:setvbuf'no'
 io.stderr:setvbuf'no'
 
+local glue = require'glue'
 local thread = require'thread'
 local socket = require'socket2'
 local ffi = require'ffi'
@@ -17,6 +18,85 @@ local function test_addr()
 	dump('123.124.125.126', 1234, 'tcp', 'inet', nil, {cannonname = true})
 	dump()
 
+end
+
+local function test_sockopt()
+	local s = assert(socket.tcp())
+	for _,k in ipairs{
+		'so_acceptconn        ',
+		'so_broadcast         ',
+		--'so_bsp_state       ',
+		'so_conditional_accept',
+		'so_connect_time      ',
+		'so_dontlinger        ',
+		'so_dontroute         ',
+		'so_error             ',
+		'so_exclusiveaddruse  ',
+		'so_keepalive         ',
+		--'so_linger          ',
+		'so_max_msg_size      ',
+		'so_maxdg             ',
+		'so_maxpathdg         ',
+		'so_oobinline         ',
+		'so_pause_accept      ',
+		'so_port_scalability  ',
+		--'so_protocol_info   ',
+		'so_randomize_port    ',
+		'so_rcvbuf            ',
+		'so_rcvlowat          ',
+		'so_rcvtimeo          ',
+		'so_reuseaddr         ',
+		'so_sndbuf            ',
+		'so_sndlowat          ',
+		'so_sndtimeo          ',
+		'so_type              ',
+		'tcp_bsdurgent        ',
+		'tcp_expedited_1122   ',
+		'tcp_maxrt            ',
+		'tcp_nodelay          ',
+		'tcp_timestamps       ',
+	} do
+		local sk, k = k, glue.trim(k)
+		local v = s:getopt(k)
+		print(sk, v)
+	end
+
+	print''
+
+	for _,k in ipairs{
+		'so_broadcast              ',
+		'so_conditional_accept     ',
+		'so_dontlinger             ',
+		'so_dontroute              ',
+		'so_exclusiveaddruse       ',
+		'so_keepalive              ',
+		'so_linger                 ',
+		'so_max_msg_size           ',
+		'so_oobinline              ',
+		'so_pause_accept           ',
+		'so_port_scalability       ',
+		'so_randomize_port         ',
+		'so_rcvbuf                 ',
+		'so_rcvlowat               ',
+		'so_rcvtimeo               ',
+		'so_reuseaddr              ',
+		'so_sndbuf                 ',
+		'so_sndlowat               ',
+		'so_sndtimeo               ',
+		'so_update_accept_context  ',
+		'so_update_connect_context ',
+		'tcp_bsdurgent             ',
+		'tcp_expedited_1122  	   ',
+		'tcp_maxrt           	   ',
+		'tcp_nodelay               ',
+		'tcp_timestamps      	   ',
+	} do
+		local sk, k = k, glue.trim(k)
+		local canget, v = pcall(s.getopt, s, k)
+		if canget then
+			print(k, pcall(s.setopt, s, k, v))
+		end
+	end
 end
 
 local function start_server()
@@ -88,6 +168,7 @@ local function test_http()
 end
 
 --test_addr()
+--test_sockopt()
 --test_http()
 
 if ffi.os == 'Windows' then
