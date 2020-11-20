@@ -9,7 +9,7 @@ local bit = require'bit'
 
 local glue = require'glue'
 local coro = require'coro'
-local valueheap = require'heap'.valueheap
+local time = require'time'
 
 local push = table.insert
 local pop = table.remove
@@ -30,6 +30,7 @@ local raw = {} --methods of raw sockets
 
 local check --fw. decl.
 local wait --fw. decl.
+local expires_array --fw. decl.
 local create_socket --fw. decl.
 local wrap_socket --fw. decl.
 
@@ -315,11 +316,16 @@ HANDLE CreateIoCompletionPort(
 );
 
 BOOL GetQueuedCompletionStatus(
-  HANDLE       CompletionPort,
-  LPDWORD      lpNumberOfBytesTransferred,
-  PULONG_PTR   lpCompletionKey,
-  LPOVERLAPPED *lpOverlapped,
-  DWORD        dwMilliseconds
+	HANDLE       CompletionPort,
+	LPDWORD      lpNumberOfBytesTransferred,
+	PULONG_PTR   lpCompletionKey,
+	LPOVERLAPPED *lpOverlapped,
+	DWORD        dwMilliseconds
+);
+
+BOOL CancelIoEx(
+	HANDLE       hFile,
+	LPOVERLAPPED lpOverlapped
 );
 
 // Sockets -------------------------------------------------------------------
@@ -765,22 +771,24 @@ do
 		}
 	]]
 	local overlapped_ptr_ct = ffi.typeof('$*', overlapped_ct)
+	local void_ptr_c = ffi.typeof('void*')
 
 	local OVERLAPPED = ffi.typeof'OVERLAPPED'
 	local LPOVERLAPPED = ffi.typeof'LPOVERLAPPED'
 
-	function overlapped(done)
+	function overlapped(s, done)
 		if #freed > 0 then
 			local job_index = pop(freed)
 			local job = jobs[job_index]
+			job.s = s
 			job.done = done
-			local o = ffi.cast(LPOVERLAPPED, job._overlapped)
+			local o = ffi.cast(LPOVERLAPPED, job.overlapped)
 			ffi.fill(o, ffi.sizeof(OVERLAPPED))
 			return o, job
 		else
-			local job = {done = done}
+			local job = {s = s, done = done}
 			local o = overlapped_ct()
-			job._overlapped = o
+			job.overlapped = o
 			push(jobs, job)
 			o.job_index = #jobs
 			return ffi.cast(LPOVERLAPPED, o), job
@@ -797,37 +805,62 @@ do
 	local obuf = ffi.new'LPOVERLAPPED[1]'
 
 	local WAIT_TIMEOUT = 258
-
-	local expires_heap = valueheap{
-		cmp = function(job1, job2) return job1.expires < job2.expires end
-	}
+	local ERROR_OPERATION_ABORTED = 995
 
 	function M.poll(max_timeout)
 		if #freed == #jobs then
 			return false, 'empty'
 		end
-		max_timeout = math.max((max_timeout or 1/0) * 1000, 0)
+		local max_timeout_ms = math.max((max_timeout or 1/0) * 1000, 0)
 		--we're going infinite after 0x7fffffff for compat. with Linux.
-		if max_timeout > 0x7fffffff then max_timeout = 0xffffffff end
+		if max_timeout_ms > 0x7fffffff then max_timeout_ms = 0xffffffff end
 		local ok = ffi.C.GetQueuedCompletionStatus(
-			M.iocp(), nbuf, keybuf, obuf, max_timeout) ~= 0
+			M.iocp(), nbuf, keybuf, obuf, max_timeout_ms) ~= 0
 		local o = obuf[0]
 		if o == nil then
 			local err = C.WSAGetLastError()
 			if err == WAIT_TIMEOUT then
-				return false, 'timeout'
+				if #expires_array > 0 then
+					--cancel all timed-out jobs.
+					local t = time.clock()
+					repeat
+						local job = expires_array[1]
+						if math.abs(t - job.expires) <= 50 then --arbitrary threshold.
+							assert(check(ffi.C.CancelIoEx(
+								ffi.cast(void_ptr_c, job.s),
+								job.overlapped.overlapped)))
+							table.remove(expires_array, 1)
+						else
+							--expires_array is sorted, so no point looking beyond this.
+							break
+						end
+					until #expires_array == 0
+					--even if we canceled them all, we still have to wait for the OS
+					--to abort them. until then we can't recycle the OVERLAPPED structures.
+					return true
+				else
+					return false, 'timeout'
+				end
+			else
+				return check(nil, err)
 			end
-			return check(nil, err)
-		end
-		local n = nbuf[0]
-		local job = free_overlapped(o)
-		local expires
-		if ok then
-			expires = coro.transfer(job.thread, job:done(n))
 		else
-			expires = coro.transfer(job.thread, check())
+			local n = nbuf[0]
+			local job = free_overlapped(o)
+			if ok then
+				assert(expires_array:remove_value(job))
+				coro.transfer(job.thread, job:done(n))
+			else
+				local err = C.WSAGetLastError()
+				if err == ERROR_OPERATION_ABORTED then --canceled
+					coro.transfer(job.thread, nil, 'timeout')
+				else
+					assert(expires_array:remove_value(job))
+					coro.transfer(job.thread, check(nil, err))
+				end
+			end
+			return true
 		end
-		return true
 	end
 end
 
@@ -837,7 +870,8 @@ do
 	local function check_pending(ok, job, expires)
 		if ok or C.WSAGetLastError() == WSA_IO_PENDING then
 			job.thread = coro.running()
-			return wait(expires)
+			job.expires = expires
+			return wait(job)
 		end
 		return check()
 	end
@@ -846,7 +880,7 @@ do
 		return true
 	end
 
-	function tcp:connect(host, port, addr_flags, expires)
+	function tcp:connect(host, port, expires, addr_flags)
 		if not self._bound then
 			--ConnectEx requires binding first.
 			local ok, err, errcode = self:bind()
@@ -854,7 +888,7 @@ do
 		end
 		local ai, err, errcode = self:addr(host, port, addr_flags)
 		if not ai then return nil, err, errcode end
-		local o, job = overlapped(return_true)
+		local o, job = overlapped(self.s, return_true)
 		local ok = ConnectEx(self.s, ai.addr, ai.addrlen, nil, 0, nil, o) == 1
 		if not err then ai:free() end
 		return check_pending(ok, job, expires)
@@ -873,7 +907,7 @@ do
 	function tcp:accept(expires)
 		local client_s, err, errcode = M.tcp(self._af, self._pr)
 		if not client_s then return nil, err, errcode end
-		local o, job = overlapped(return_true)
+		local o, job = overlapped(self.s, return_true)
 		local ok = AcceptEx(self.s, client_s.s, accept_buf, 0, sa_len, sa_len, nbuf, o) == 1
 		local ok, err, errcode = check_pending(ok, job, expires)
 		if not ok then return nil, err, errcode end
@@ -892,7 +926,7 @@ do
 	function tcp:send(buf, len, expires)
 		wsabuf.buf = type(buf) == 'string' and ffi.cast(pchar_t, buf) or buf
 		wsabuf.len = len or #buf
-		local o, job = overlapped(io_done)
+		local o, job = overlapped(self.s, io_done)
 		local ok = C.WSASend(self.s, wsabuf, 1, nbuf, 0, o, nil) == 0
 		return check_pending(ok, job, expires)
 	end
@@ -902,7 +936,7 @@ do
 		if not ai then return nil, err, errcode end
 		wsabuf.buf = type(buf) == 'string' and ffi.cast(pchar_t, buf) or buf
 		wsabuf.len = len or #buf
-		local o, job = overlapped(io_done)
+		local o, job = overlapped(self.s, io_done)
 		local ok = C.WSASendTo(self.s, wsabuf, 1, nbuf, flags, ai.addr, ai.addrlen, o, nil) == 0
 		ai:free()
 		return check_pending(ok, job, expires)
@@ -911,7 +945,7 @@ do
 	function tcp:recv(buf, len, expires)
 		wsabuf.buf = buf
 		wsabuf.len = len
-		local o, job = overlapped(io_done)
+		local o, job = overlapped(self.s,io_done)
 		flagsbuf[0] = 0
 		local ok = C.WSARecv(self.s, wsabuf, 1, nbuf, flagsbuf, o, nil) == 0
 		return check_pending(ok, job, expires)
@@ -922,7 +956,7 @@ do
 		if not ai then return nil, err, errcode end
 		wsabuf.buf = buf
 		wsabuf.len = len
-		local o, job = overlapped(io_done)
+		local o, job = overlapped(self.s, io_done)
 		flagsbuf[0] = flags
 		local ok = C.WSARecvFrom(self.s, wsabuf, 1, nbuf, flagsbuf, ai.addr, ai.addrlen, o, nil) == 0
 		ai:free()
@@ -1006,7 +1040,7 @@ do
 		return C.connect(self.s, ai.addr, ai.addrlen)
 	end, EINPROGRESS)
 
-	function tcp:connect(host, port, addr_flags)
+	function tcp:connect(host, port, expires, addr_flags)
 		local ai, err, errcode = self:addr(host, port, addr_flags)
 		if not ai then return nil, err, errcode end
 		if not self._bound then
@@ -1027,7 +1061,7 @@ do
 		return C.accept4(self.s, accept_buf, nbuf, SOCK_NONBLOCK)
 	end, EWOULDBLOCK)
 
-	function tcp:accept()
+	function tcp:accept(expires)
 		local s, err, errno = tcp_accept(self)
 		if not s then return nil, err, errno end
 		local s = wrap_socket(tcp, s, self._st, self._af, self._pr)
@@ -1037,11 +1071,11 @@ do
 	end
 end
 
-tcp.send = make_async('_wt', function(self, buf, len, flags)
+tcp.send = make_async('_wt', function(self, buf, len, expires, flags)
 	return C.send(self.s, buf, len or #buf, flags or 0)
 end, EWOULDBLOCK)
 
-tcp.recv = make_async('_rt', function(self, buf, len, flags)
+tcp.recv = make_async('_rt', function(self, buf, len, expires, flags)
 	return C.recv(self.s, buf, len, flags or 0)
 end, EWOULDBLOCK)
 
@@ -1050,7 +1084,7 @@ do
 		return C.sendto(self.s, buf, len or #buf, flags or 0, ai.addr, ai.addrlen)
 	end, EWOULDBLOCK)
 
-	function udp:send(buf, len, host, port, flags, addr_flags)
+	function udp:send(buf, len, host, port, expires, flags, addr_flags)
 		local ai, err, errcode = self:addr(host, port, addr_flags)
 		if not ai then return nil, err, errcode end
 		return udp_send(self, buf, len, flags, ai)
@@ -1062,7 +1096,7 @@ do
 		local ret = C.recvfrom(self.s, buf, len, flags or 0, ai.addr, ai.addrlen)
 	end, EWOULDBLOCK)
 
-	function udp:recv(buf, len, host, port, flags, addr_flags)
+	function udp:recv(buf, len, host, port, expires, flags, addr_flags)
 		local ai, err, errcode = self:addr(host, port, addr_flags)
 		if not ai then return nil, err, errcode end
 		return udp_recv(self, buf, len, flags, ai)
@@ -1156,13 +1190,13 @@ do
 	end
 	local maxevents = 1
 	local events = ffi.new('struct epoll_event[?]', maxevents)
-	function M.poll(timeout)
+	function M.poll(max_timeout)
 		if wait_count == 0 then
 			return false, 'empty'
 		end
-		timeout = math.max((timeout or 1/0) * 1000, 0)
-		if timeout > 0x7fffffff then timeout = -1 end --infinite
-		local n = C.epoll_wait(M.epoll_fd(), events, maxevents, timeout)
+		max_timeout = math.max((max_timeout or 1/0) * 1000, 0)
+		if max_timeout > 0x7fffffff then max_timeout = -1 end --infinite
+		local n = C.epoll_wait(M.epoll_fd(), events, maxevents, max_timeout)
 		if n > 0 then
 			for i = 0, n-1 do
 				local socket = sockets[events[i].data.u32]
@@ -1251,11 +1285,18 @@ glue.update(raw, socket)
 
 --coroutine-based scheduler --------------------------------------------------
 
+--[[local]] expires_array = glue.sortedarray{
+	cmp = function(self, i, v)
+		return self[i].expires < v.expires
+	end,
+}
+
 local loop_thread
 
---[[local]] function wait(expires)
+--[[local]] function wait(job)
+	expires_array:push(job)
 	assert(coro.running() ~= loop_thread, 'trying to I/O from the main thread')
-	return coro.transfer(loop_thread, expires)
+	return coro.transfer(loop_thread)
 end
 
 function M.newthread(handler, ...)
@@ -1289,10 +1330,12 @@ end
 
 local stop = false
 function M.stop() stop = true end
-function M.start(timeout)
+function M.start(max_timeout)
 	loop_thread = coro.running()
 	repeat
-		local ret, err, errcode = M.poll(timeout)
+		local job = expires_array[1]
+		local timeout = job and math.max(0, job.expires - time.clock()) or 1/0
+		local ret, err, errcode = M.poll(math.min(timeout, max_timeout))
 		if not ret then
 			if err == 'empty' then
 				M.stop()
@@ -1300,6 +1343,7 @@ function M.start(timeout)
 				return ret, err, errcode
 			end
 		end
+
 	until stop
 	return true
 end
