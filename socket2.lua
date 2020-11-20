@@ -2,7 +2,11 @@
 --Portable socket API with IOCP, epoll and kqueue for LuaJIT.
 --Written by Cosmin Apreutesei. Public Domain.
 
-if not ... then require'socket2_test'; return end
+if not ... then
+	require'http_client_test'
+	--require'socket2_test'
+	; return
+end
 
 local ffi = require'ffi'
 local bit = require'bit'
@@ -612,11 +616,9 @@ do
 		so_randomize_port     = 0x3005, -- randomize assignment of wildcard ports
 		so_rcvbuf             = 0x1002, -- receive buffer size
 		so_rcvlowat           = 0x1004, -- receive low-water mark
-		so_rcvtimeo           = 0x1006, -- receive timeout
 		so_reuseaddr          = 0x0004, -- allow local address reuse
 		so_sndbuf             = 0x1001, -- send buffer size
 		so_sndlowat           = 0x1003, -- send low-water mark
-		so_sndtimeo           = 0x1005, -- send timeout
 		so_type               = 0x1008, -- get socket type
 		so_update_accept_context  = 0x700b,
 		so_update_connect_context = 0x7010,
@@ -689,11 +691,9 @@ do
 		so_randomize_port     = get_uint16,
 		so_rcvbuf             = get_uint,
 		so_rcvlowat           = get_uint,
-		so_rcvtimeo           = get_uint,
 		so_reuseaddr          = get_bool,
 		so_sndbuf             = get_uint,
 		so_sndlowat           = get_uint,
-		so_sndtimeo           = get_uint,
 		so_type               = get_uint,
 		tcp_bsdurgent         = get_bool,
 		tcp_expedited_1122  	 = get_bool,
@@ -717,11 +717,9 @@ do
 		so_randomize_port     = set_uint16,
 		so_rcvbuf             = set_uint,
 		so_rcvlowat           = set_uint,
-		so_rcvtimeo           = set_uint,
 		so_reuseaddr          = set_bool,
 		so_sndbuf             = set_uint,
 		so_sndlowat           = set_uint,
-		so_sndtimeo           = set_uint,
 		so_update_accept_context  = set_bool,
 		so_update_connect_context = set_bool,
 		tcp_bsdurgent         = set_bool,
@@ -776,17 +774,18 @@ do
 	local OVERLAPPED = ffi.typeof'OVERLAPPED'
 	local LPOVERLAPPED = ffi.typeof'LPOVERLAPPED'
 
-	function overlapped(s, done)
+	function overlapped(s, done, expires)
 		if #freed > 0 then
 			local job_index = pop(freed)
 			local job = jobs[job_index]
 			job.s = s
 			job.done = done
+			job.expires = expires
 			local o = ffi.cast(LPOVERLAPPED, job.overlapped)
 			ffi.fill(o, ffi.sizeof(OVERLAPPED))
 			return o, job
 		else
-			local job = {s = s, done = done}
+			local job = {s = s, done = done, expires = expires}
 			local o = overlapped_ct()
 			job.overlapped = o
 			push(jobs, job)
@@ -825,7 +824,7 @@ do
 					local t = time.clock()
 					repeat
 						local job = expires_array[1]
-						if math.abs(t - job.expires) <= 50 then --arbitrary threshold.
+						if math.abs(t - job.expires) <= .05 then --arbitrary threshold.
 							assert(check(ffi.C.CancelIoEx(
 								ffi.cast(void_ptr_c, job.s),
 								job.overlapped.overlapped)))
@@ -848,14 +847,18 @@ do
 			local n = nbuf[0]
 			local job = free_overlapped(o)
 			if ok then
-				assert(expires_array:remove_value(job))
+				if job.expires then
+					assert(expires_array:remove_value(job))
+				end
 				coro.transfer(job.thread, job:done(n))
 			else
 				local err = C.WSAGetLastError()
 				if err == ERROR_OPERATION_ABORTED then --canceled
 					coro.transfer(job.thread, nil, 'timeout')
 				else
-					assert(expires_array:remove_value(job))
+					if job.expires then
+						assert(expires_array:remove_value(job))
+					end
 					coro.transfer(job.thread, check(nil, err))
 				end
 			end
@@ -867,10 +870,9 @@ end
 do
 	local WSA_IO_PENDING = 997
 
-	local function check_pending(ok, job, expires)
+	local function check_pending(ok, job)
 		if ok or C.WSAGetLastError() == WSA_IO_PENDING then
 			job.thread = coro.running()
-			job.expires = expires
 			return wait(job)
 		end
 		return check()
@@ -888,10 +890,10 @@ do
 		end
 		local ai, err, errcode = self:addr(host, port, addr_flags)
 		if not ai then return nil, err, errcode end
-		local o, job = overlapped(self.s, return_true)
+		local o, job = overlapped(self.s, return_true, expires)
 		local ok = ConnectEx(self.s, ai.addr, ai.addrlen, nil, 0, nil, o) == 1
 		if not err then ai:free() end
-		return check_pending(ok, job, expires)
+		return check_pending(ok, job)
 	end
 
 	local accept_buf_ct = ffi.typeof[[
@@ -907,9 +909,9 @@ do
 	function tcp:accept(expires)
 		local client_s, err, errcode = M.tcp(self._af, self._pr)
 		if not client_s then return nil, err, errcode end
-		local o, job = overlapped(self.s, return_true)
+		local o, job = overlapped(self.s, return_true, expires)
 		local ok = AcceptEx(self.s, client_s.s, accept_buf, 0, sa_len, sa_len, nbuf, o) == 1
-		local ok, err, errcode = check_pending(ok, job, expires)
+		local ok, err, errcode = check_pending(ok, job)
 		if not ok then return nil, err, errcode end
 		return client_s, accept_buf.remote_addr, accept_buf.local_addr
 	end
@@ -926,9 +928,9 @@ do
 	function tcp:send(buf, len, expires)
 		wsabuf.buf = type(buf) == 'string' and ffi.cast(pchar_t, buf) or buf
 		wsabuf.len = len or #buf
-		local o, job = overlapped(self.s, io_done)
+		local o, job = overlapped(self.s, io_done, expires)
 		local ok = C.WSASend(self.s, wsabuf, 1, nbuf, 0, o, nil) == 0
-		return check_pending(ok, job, expires)
+		return check_pending(ok, job)
 	end
 
 	function udp:send(buf, len, host, port, expires, flags, addr_flags)
@@ -936,19 +938,19 @@ do
 		if not ai then return nil, err, errcode end
 		wsabuf.buf = type(buf) == 'string' and ffi.cast(pchar_t, buf) or buf
 		wsabuf.len = len or #buf
-		local o, job = overlapped(self.s, io_done)
+		local o, job = overlapped(self.s, io_done, expires)
 		local ok = C.WSASendTo(self.s, wsabuf, 1, nbuf, flags, ai.addr, ai.addrlen, o, nil) == 0
 		ai:free()
-		return check_pending(ok, job, expires)
+		return check_pending(ok, job)
 	end
 
 	function tcp:recv(buf, len, expires)
 		wsabuf.buf = buf
 		wsabuf.len = len
-		local o, job = overlapped(self.s,io_done)
+		local o, job = overlapped(self.s, io_done, expires)
 		flagsbuf[0] = 0
 		local ok = C.WSARecv(self.s, wsabuf, 1, nbuf, flagsbuf, o, nil) == 0
-		return check_pending(ok, job, expires)
+		return check_pending(ok, job)
 	end
 
 	function udp:recv(buf, len, host, port, expires, flags, addr_flags)
@@ -956,11 +958,11 @@ do
 		if not ai then return nil, err, errcode end
 		wsabuf.buf = buf
 		wsabuf.len = len
-		local o, job = overlapped(self.s, io_done)
+		local o, job = overlapped(self.s, io_done, expires)
 		flagsbuf[0] = flags
 		local ok = C.WSARecvFrom(self.s, wsabuf, 1, nbuf, flagsbuf, ai.addr, ai.addrlen, o, nil) == 0
 		ai:free()
-		return check_pending(ok, job, expires)
+		return check_pending(ok, job)
 	end
 end
 
@@ -1294,7 +1296,9 @@ glue.update(raw, socket)
 local loop_thread
 
 --[[local]] function wait(job)
-	expires_array:push(job)
+	if job.expires then
+		expires_array:push(job)
+	end
 	assert(coro.running() ~= loop_thread, 'trying to I/O from the main thread')
 	return coro.transfer(loop_thread)
 end
