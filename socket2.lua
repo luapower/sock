@@ -12,6 +12,7 @@ local ffi = require'ffi'
 local bit = require'bit'
 
 local glue = require'glue'
+local heap = require'heap'
 local coro = require'coro'
 local time = require'time'
 
@@ -34,7 +35,6 @@ local raw = {} --methods of raw sockets
 
 local check --fw. decl.
 local wait --fw. decl.
-local expires_array --fw. decl.
 local create_socket --fw. decl.
 local wrap_socket --fw. decl.
 
@@ -757,7 +757,14 @@ function socket:close()
 	return check(C.closesocket(self.s) == 0)
 end
 
-local overlapped
+local expires_heap = heap.valueheap{
+	cmp = function(job1, job2)
+		return job1.expires < job2.expires
+	end,
+	index_key = 'index', --enable O(log n) removal.
+}
+
+local overlapped, free_overlapped, overlapped_empty
 do
 	local jobs = {} --{job1, ...}
 	local freed = {} --{job_index1, ...}
@@ -769,16 +776,15 @@ do
 		}
 	]]
 	local overlapped_ptr_ct = ffi.typeof('$*', overlapped_ct)
-	local void_ptr_c = ffi.typeof('void*')
 
 	local OVERLAPPED = ffi.typeof'OVERLAPPED'
 	local LPOVERLAPPED = ffi.typeof'LPOVERLAPPED'
 
-	function overlapped(s, done, expires)
+	function overlapped(socket, done, expires)
 		if #freed > 0 then
 			local job_index = pop(freed)
 			local job = jobs[job_index]
-			job.s = s
+			job.socket = socket
 			job.done = done
 			job.expires = expires
 			local o = ffi.cast(LPOVERLAPPED, job.overlapped)
@@ -800,40 +806,57 @@ do
 		return jobs[o.job_index]
 	end
 
+	function overlapped_empty()
+		return #freed == #jobs
+	end
+end
+
+do
 	local keybuf = ffi.new'ULONG_PTR[1]'
 	local obuf = ffi.new'LPOVERLAPPED[1]'
 
 	local WAIT_TIMEOUT = 258
 	local ERROR_OPERATION_ABORTED = 995
 
+	local void_ptr_c = ffi.typeof'void*'
+
 	function M.poll(max_timeout)
-		if #freed == #jobs then
+
+		if overlapped_empty() then
 			return false, 'empty'
 		end
-		local max_timeout_ms = math.max((max_timeout or 1/0) * 1000, 0)
+
+		local job = expires_heap:peek()
+		local timeout = job and math.max(0, job.expires - time.clock()) or 1/0
+		local timeout = math.min(timeout, max_timeout)
+
+		local timeout_ms = math.max((timeout or 1/0) * 1000, 0)
 		--we're going infinite after 0x7fffffff for compat. with Linux.
-		if max_timeout_ms > 0x7fffffff then max_timeout_ms = 0xffffffff end
+		if timeout_ms > 0x7fffffff then timeout_ms = 0xffffffff end
+
 		local ok = ffi.C.GetQueuedCompletionStatus(
-			M.iocp(), nbuf, keybuf, obuf, max_timeout_ms) ~= 0
+			M.iocp(), nbuf, keybuf, obuf, timeout_ms) ~= 0
+
 		local o = obuf[0]
 		if o == nil then
 			local err = C.WSAGetLastError()
 			if err == WAIT_TIMEOUT then
-				if #expires_array > 0 then
+				if expires_heap:length() > 0 then
 					--cancel all timed-out jobs.
 					local t = time.clock()
 					repeat
-						local job = expires_array[1]
+						local job = expires_heap:peek()
 						if math.abs(t - job.expires) <= .05 then --arbitrary threshold.
 							assert(check(ffi.C.CancelIoEx(
-								ffi.cast(void_ptr_c, job.s),
+								ffi.cast(void_ptr_c, job.socket.s),
 								job.overlapped.overlapped)))
-							table.remove(expires_array, 1)
+							expires_heap:pop()
+							job.expires = nil
 						else
-							--expires_array is sorted, so no point looking beyond this.
+							--jobs are popped in expire-order so no point looking beyond this.
 							break
 						end
-					until #expires_array == 0
+					until expires_heap:length() == 0
 					--even if we canceled them all, we still have to wait for the OS
 					--to abort them. until then we can't recycle the OVERLAPPED structures.
 					return true
@@ -848,16 +871,17 @@ do
 			local job = free_overlapped(o)
 			if ok then
 				if job.expires then
-					assert(expires_array:remove_value(job))
+					assert(expires_heap:remove(job))
 				end
 				coro.transfer(job.thread, job:done(n))
 			else
 				local err = C.WSAGetLastError()
 				if err == ERROR_OPERATION_ABORTED then --canceled
+					job.socket:close()
 					coro.transfer(job.thread, nil, 'timeout')
 				else
 					if job.expires then
-						assert(expires_array:remove_value(job))
+						assert(expires_heap:remove(job))
 					end
 					coro.transfer(job.thread, check(nil, err))
 				end
@@ -872,8 +896,11 @@ do
 
 	local function check_pending(ok, job)
 		if ok or C.WSAGetLastError() == WSA_IO_PENDING then
+			if job.expires then
+				expires_heap:push(job)
+			end
 			job.thread = coro.running()
-			return wait(job)
+			return wait()
 		end
 		return check()
 	end
@@ -890,7 +917,7 @@ do
 		end
 		local ai, err, errcode = self:addr(host, port, addr_flags)
 		if not ai then return nil, err, errcode end
-		local o, job = overlapped(self.s, return_true, expires)
+		local o, job = overlapped(self, return_true, expires)
 		local ok = ConnectEx(self.s, ai.addr, ai.addrlen, nil, 0, nil, o) == 1
 		if not err then ai:free() end
 		return check_pending(ok, job)
@@ -909,7 +936,7 @@ do
 	function tcp:accept(expires)
 		local client_s, err, errcode = M.tcp(self._af, self._pr)
 		if not client_s then return nil, err, errcode end
-		local o, job = overlapped(self.s, return_true, expires)
+		local o, job = overlapped(self, return_true, expires)
 		local ok = AcceptEx(self.s, client_s.s, accept_buf, 0, sa_len, sa_len, nbuf, o) == 1
 		local ok, err, errcode = check_pending(ok, job)
 		if not ok then return nil, err, errcode end
@@ -928,7 +955,7 @@ do
 	function tcp:send(buf, len, expires)
 		wsabuf.buf = type(buf) == 'string' and ffi.cast(pchar_t, buf) or buf
 		wsabuf.len = len or #buf
-		local o, job = overlapped(self.s, io_done, expires)
+		local o, job = overlapped(self, io_done, expires)
 		local ok = C.WSASend(self.s, wsabuf, 1, nbuf, 0, o, nil) == 0
 		return check_pending(ok, job)
 	end
@@ -938,7 +965,7 @@ do
 		if not ai then return nil, err, errcode end
 		wsabuf.buf = type(buf) == 'string' and ffi.cast(pchar_t, buf) or buf
 		wsabuf.len = len or #buf
-		local o, job = overlapped(self.s, io_done, expires)
+		local o, job = overlapped(self, io_done, expires)
 		local ok = C.WSASendTo(self.s, wsabuf, 1, nbuf, flags, ai.addr, ai.addrlen, o, nil) == 0
 		ai:free()
 		return check_pending(ok, job)
@@ -947,7 +974,7 @@ do
 	function tcp:recv(buf, len, expires)
 		wsabuf.buf = buf
 		wsabuf.len = len
-		local o, job = overlapped(self.s, io_done, expires)
+		local o, job = overlapped(self, io_done, expires)
 		flagsbuf[0] = 0
 		local ok = C.WSARecv(self.s, wsabuf, 1, nbuf, flagsbuf, o, nil) == 0
 		return check_pending(ok, job)
@@ -958,7 +985,7 @@ do
 		if not ai then return nil, err, errcode end
 		wsabuf.buf = buf
 		wsabuf.len = len
-		local o, job = overlapped(self.s, io_done, expires)
+		local o, job = overlapped(self, io_done, expires)
 		flagsbuf[0] = flags
 		local ok = C.WSARecvFrom(self.s, wsabuf, 1, nbuf, flagsbuf, ai.addr, ai.addrlen, o, nil) == 0
 		ai:free()
@@ -971,8 +998,6 @@ end --if Windows
 --POSIX sockets --------------------------------------------------------------
 
 local register_socket, unregister_socket --fw. decl.
-
-local wait_count = 0
 
 if Linux or OSX then
 
@@ -1021,13 +1046,41 @@ end
 local EWOULDBLOCK = 11 --alias of EAGAIN in Linux
 local EINPROGRESS = 115
 
-local function make_async(thread_field, f, wait_errno)
-	return function(self, ...)
+local wait_count = 0
+
+local recv_expires_heap = heap.valueheap{
+	cmp = function(s1, s2)
+		return s1.recv_expires < s2.recv_expires
+	end,
+	index_key = 'index', --enable O(log n) removal.
+}
+
+local send_expires_heap = heap.valueheap{
+	cmp = function(s1, s2)
+		return s1.send_expires < s2.send_expires
+	end,
+	index_key = 'index', --enable O(log n) removal.
+}
+
+local function make_async(for_writing, f, wait_errno)
+	return function(self, expires, ...)
 		::again::
 		local ret = f(self, ...)
 		if ret >= 0 then return ret end
 		if ffi.errno() == wait_errno then
-			self[thread_field] = coro.running()
+			if for_writing then
+				self.send_expires = expires
+				if expires then
+					send_expires_heap:push(self)
+				end
+				self.send_thread = coro.running()
+			else
+				self.recv_expires = expires
+				if expires then
+					recv_expires_heap:push(self)
+				end
+				self.recv_thread = coro.running()
+			end
 			wait_count = wait_count + 1
 			wait()
 			wait_count = wait_count - 1
@@ -1037,20 +1090,18 @@ local function make_async(thread_field, f, wait_errno)
 	end
 end
 
-do
-	local connect = make_async('_wt', function(self, ai)
-		return C.connect(self.s, ai.addr, ai.addrlen)
-	end, EINPROGRESS)
+local connect = make_async(true, function(self, ai)
+	return C.connect(self.s, ai.addr, ai.addrlen)
+end, EINPROGRESS)
 
-	function tcp:connect(host, port, expires, addr_flags)
-		local ai, err, errcode = self:addr(host, port, addr_flags)
-		if not ai then return nil, err, errcode end
-		if not self._bound then
-			local ok, err, errcode = self:bind()
-			if not ok then return nil, err, errcode end
-		end
-		return connect(self, ai)
+function tcp:connect(host, port, expires, addr_flags)
+	local ai, err, errcode = self:addr(host, port, addr_flags)
+	if not ai then return nil, err, errcode end
+	if not self._bound then
+		local ok, err, errcode = self:bind()
+		if not ok then return nil, err, errcode end
 	end
+	return connect(self, expires, ai)
 end
 
 do
@@ -1058,13 +1109,13 @@ do
 	local accept_buf = ffi.new'sockaddr'
 	local accept_buf_size = ffi.sizeof(accept_buf)
 
-	local tcp_accept = make_async('_rt', function(self)
+	local tcp_accept = make_async(false, function(self)
 		nbuf[0] = accept_buf_size
 		return C.accept4(self.s, accept_buf, nbuf, SOCK_NONBLOCK)
 	end, EWOULDBLOCK)
 
 	function tcp:accept(expires)
-		local s, err, errno = tcp_accept(self)
+		local s, err, errno = tcp_accept(self, expires)
 		if not s then return nil, err, errno end
 		local s = wrap_socket(tcp, s, self._st, self._af, self._pr)
 		local ok, err, errcode = register_socket(s)
@@ -1073,39 +1124,41 @@ do
 	end
 end
 
-tcp.send = make_async('_wt', function(self, buf, len, expires, flags)
+local tcp_send = make_async(true, function(self, buf, len, flags)
 	return C.send(self.s, buf, len or #buf, flags or 0)
 end, EWOULDBLOCK)
 
-tcp.recv = make_async('_rt', function(self, buf, len, expires, flags)
+function tcp:send(buf, len, expires, flags)
+	return tcp_send(self, expires, buf, len, flags)
+end
+
+local tcp_recv = make_async(false, function(self, buf, len, flags)
 	return C.recv(self.s, buf, len, flags or 0)
 end, EWOULDBLOCK)
 
-do
-	local udp_send = make_async('_wt', function(self, buf, len, flags, ai)
-		return C.sendto(self.s, buf, len or #buf, flags or 0, ai.addr, ai.addrlen)
-	end, EWOULDBLOCK)
-
-	function udp:send(buf, len, host, port, expires, flags, addr_flags)
-		local ai, err, errcode = self:addr(host, port, addr_flags)
-		if not ai then return nil, err, errcode end
-		return udp_send(self, buf, len, flags, ai)
-	end
+function tcp:recv(buf, len, expires, flags)
+	return tcp_recv(self, expires, buf, len, flags)
 end
 
-do
-	local udp_recv = make_async('_rt', function(self, buf, len, flags, ai)
-		local ret = C.recvfrom(self.s, buf, len, flags or 0, ai.addr, ai.addrlen)
-	end, EWOULDBLOCK)
+local udp_send = make_async(true, function(self, buf, len, flags, ai)
+	return C.sendto(self.s, buf, len or #buf, flags or 0, ai.addr, ai.addrlen)
+end, EWOULDBLOCK)
 
-	function udp:recv(buf, len, host, port, expires, flags, addr_flags)
-		local ai, err, errcode = self:addr(host, port, addr_flags)
-		if not ai then return nil, err, errcode end
-		return udp_recv(self, buf, len, flags, ai)
-	end
+function udp:send(buf, len, host, port, expires, flags, addr_flags)
+	local ai, err, errcode = self:addr(host, port, addr_flags)
+	if not ai then return nil, err, errcode end
+	return udp_send(self, expires, buf, len, flags, ai)
 end
 
-end --if not Windows
+local udp_recv = make_async(false, function(self, buf, len, flags, ai)
+	local ret = C.recvfrom(self.s, buf, len, flags or 0, ai.addr, ai.addrlen)
+end, EWOULDBLOCK)
+
+function udp:recv(buf, len, host, port, expires, flags, addr_flags)
+	local ai, err, errcode = self:addr(host, port, addr_flags)
+	if not ai then return nil, err, errcode end
+	return udp_recv(self, expires, buf, len, flags, ai)
+end
 
 --epoll ----------------------------------------------------------------------
 
@@ -1182,32 +1235,82 @@ do
 		return true
 	end
 
-	local function resume(socket, e, event, thread_field)
+	local function resume(socket, e, event, for_writing)
 		if bit.band(e, event) ~= 0 then --read
-			local thread = socket[thread_field]
+			local thread
+			if for_writing then
+				thread = socket.send_thread
+			else
+				thread = socket.recv_thread
+			end
 			if not thread then return end --misfire.
-			socket[thread_field] = false
+			if for_writing then
+				if socket.send_expires then
+					assert(send_expires_heap:remove(socket))
+					socket.send_expires = nil
+				end
+				socket.send_thread = false
+			else
+				if socket.recv_expires then
+					assert(recv_expires_heap:remove(socket))
+					socket.recv_expires = nil
+				end
+				socket.recv_thread = false
+			end
 			coro.transfer(thread)
 		end
 	end
+
+	local function check_heap(heap, EXPIRES, THREAD, t)
+		if heap:length() > 0 then
+			repeat
+				local socket = heap:peek()
+				if math.abs(t - socket[EXPIRES]) <= .05 then --arbitrary threshold.
+					assert(heap:pop())
+					socket[EXPIRES] = nil
+					socket:close()
+					coro.transfer(socket[THREAD], nil, 'timeout')
+				else
+					--socket are popped in expire-order so no point looking beyond this.
+					break
+				end
+			until heap:length() == 0
+		end
+	end
+
 	local maxevents = 1
 	local events = ffi.new('struct epoll_event[?]', maxevents)
+
 	function M.poll(max_timeout)
+
 		if wait_count == 0 then
 			return false, 'empty'
 		end
-		max_timeout = math.max((max_timeout or 1/0) * 1000, 0)
-		if max_timeout > 0x7fffffff then max_timeout = -1 end --infinite
-		local n = C.epoll_wait(M.epoll_fd(), events, maxevents, max_timeout)
+
+		local ss = send_expires_heap:peek()
+		local rs = recv_expires_heap:peek()
+		local sx = ss and ss.send_expires
+		local rx = rs and rs.recv_expires
+		local expires = math.min(sx or 1/0, rx or 1/0)
+		local timeout = expires < 1/0 and math.max(0, expires - time.clock()) or 1/0
+		local timeout = math.min(timeout, max_timeout)
+
+		local timeout = math.max((timeout or 1/0) * 1000, 0)
+		if timeout > 0x7fffffff then timeout = -1 end --infinite
+		local n = C.epoll_wait(M.epoll_fd(), events, maxevents, timeout)
 		if n > 0 then
 			for i = 0, n-1 do
 				local socket = sockets[events[i].data.u32]
 				local e = events[i].events
-				resume(socket, e, EPOLLIN , '_rt')
-				resume(socket, e, EPOLLOUT, '_wt')
+				resume(socket, e, EPOLLIN , false)
+				resume(socket, e, EPOLLOUT, true)
 			end
 			return true
 		elseif n == 0 then
+			--cancel all timed-out events.
+			local t = time.clock()
+			check_heap(send_expires_heap, 'send_expires', 'send_thread', t)
+			check_heap(recv_expires_heap, 'recv_expires', 'recv_thread', t)
 			return false, 'timeout'
 		else
 			return check()
@@ -1230,6 +1333,8 @@ int kevent(int kq, const struct kevent *changelist, int nchanges,
 ]]
 
 end --if OSX
+
+end --if Linux or OSX
 
 --bind() ---------------------------------------------------------------------
 
@@ -1287,59 +1392,48 @@ glue.update(raw, socket)
 
 --coroutine-based scheduler --------------------------------------------------
 
---[[local]] expires_array = glue.sortedarray{
-	cmp = function(self, i, v)
-		return self[i].expires < v.expires
-	end,
-}
+local poll_thread
 
-local loop_thread
-
---[[local]] function wait(job)
-	if job.expires then
-		expires_array:push(job)
-	end
-	assert(coro.running() ~= loop_thread, 'trying to I/O from the main thread')
-	return coro.transfer(loop_thread)
+--[[local]] function wait()
+	assert(coro.running() ~= poll_thread, 'trying to I/O from the main thread')
+	return coro.transfer(poll_thread)
 end
 
 function M.newthread(handler, ...)
-	--wrap handler so that it terminates in current loop_thread.
+	--wrap handler so that it terminates in current poll_thread.
 	local thread = coro.create(function(...)
 		local ok, err = glue.pcall(handler, ...) --last chance to get stacktrace.
 		if not ok then error(err, 2) end
-		coro.transfer(loop_thread)
+		coro.transfer(poll_thread)
 	end)
-	local real_loop_thread = loop_thread
-	loop_thread = coro.running() --make it get back here the first time.
+	local real_poll_thread = poll_thread
+	poll_thread = coro.running() --make it get back here the first time.
 	coro.transfer(thread, ...)
-	loop_thread = real_loop_thread
+	poll_thread = real_poll_thread
 	return thread
 end
 
 M.thread = coro.running
 
 function M.suspend()
-	return coro.transfer(loop_thread)
+	return coro.transfer(poll_thread)
 end
 
 function M.resume(thread, ...)
-	local loop_thread0 = loop_thread
-	--change loop_thread temporarily so that we get back here
+	local poll_thread0 = poll_thread
+	--change poll_thread temporarily so that we get back here
 	--on the first call to suspend().
-	loop_thread = coro.running()
+	poll_thread = coro.running()
 	coro.transfer(thread, ...)
-	loop_thread = loop_thread0
+	poll_thread = poll_thread0
 end
 
 local stop = false
 function M.stop() stop = true end
 function M.start(max_timeout)
-	loop_thread = coro.running()
+	poll_thread = coro.running()
 	repeat
-		local job = expires_array[1]
-		local timeout = job and math.max(0, job.expires - time.clock()) or 1/0
-		local ret, err, errcode = M.poll(math.min(timeout, max_timeout))
+		local ret, err, errcode = M.poll(max_timeout)
 		if not ret then
 			if err == 'empty' then
 				M.stop()
@@ -1347,7 +1441,6 @@ function M.start(max_timeout)
 				return ret, err, errcode
 			end
 		end
-
 	until stop
 	return true
 end
