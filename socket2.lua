@@ -349,6 +349,7 @@ SOCKET WSASocketW(
 	DWORD               dwFlags
 );
 int closesocket(SOCKET s);
+int shutdown(SOCKET s, int how);
 
 typedef struct WSAData {
 	WORD wVersion;
@@ -757,6 +758,13 @@ function socket:close()
 	return check(C.closesocket(self.s) == 0)
 end
 
+function socket:shutdown(which)
+	return check(ffi.C.shutdown(self.s,
+		   which == 'r' and 0
+		or which == 'w' and 1
+		or (not which or which == 'rw' and 2)))
+end
+
 local expires_heap = heap.valueheap{
 	cmp = function(job1, job2)
 		return job1.expires < job2.expires
@@ -844,8 +852,11 @@ do
 				if expires_heap:length() > 0 then
 					--cancel all timed-out jobs.
 					local t = time.clock()
-					repeat
+					while true do
 						local job = expires_heap:peek()
+						if not job then
+							break
+						end
 						if math.abs(t - job.expires) <= .05 then --arbitrary threshold.
 							assert(check(ffi.C.CancelIoEx(
 								ffi.cast(void_ptr_c, job.socket.s),
@@ -856,7 +867,7 @@ do
 							--jobs are popped in expire-order so no point looking beyond this.
 							break
 						end
-					until expires_heap:length() == 0
+					end
 					--even if we canceled them all, we still have to wait for the OS
 					--to abort them. until then we can't recycle the OVERLAPPED structures.
 					return true
@@ -877,7 +888,6 @@ do
 			else
 				local err = C.WSAGetLastError()
 				if err == ERROR_OPERATION_ABORTED then --canceled
-					job.socket:close()
 					coro.transfer(job.thread, nil, 'timeout')
 				else
 					if job.expires then
@@ -894,13 +904,21 @@ end
 do
 	local WSA_IO_PENDING = 997
 
+	local function check_timeout(job, ...)
+		local ret, err = ...
+		if ret == nil and err == 'timeout' then
+			job.socket:close()
+		end
+		return ...
+	end
+
 	local function check_pending(ok, job)
 		if ok or C.WSAGetLastError() == WSA_IO_PENDING then
 			if job.expires then
 				expires_heap:push(job)
 			end
 			job.thread = coro.running()
-			return wait()
+			return check_timeout(job, wait())
 		end
 		return check()
 	end
@@ -1043,6 +1061,13 @@ function socket:close()
 	return check(C.close(self.s) == 0)
 end
 
+function socket:shutdown(which)
+	return check(ffi.C.shutdown(self.s,
+		   which == 'r' and 0
+		or which == 'w' and 1
+		or (not which or which == 'rw' and 2)))
+end
+
 local EWOULDBLOCK = 11 --alias of EAGAIN in Linux
 local EINPROGRESS = 115
 
@@ -1082,8 +1107,14 @@ local function make_async(for_writing, f, wait_errno)
 				self.recv_thread = coro.running()
 			end
 			wait_count = wait_count + 1
-			wait()
+			local ok, err = wait()
 			wait_count = wait_count - 1
+			if not ok then
+				if err == 'timeout' then
+					self:close()
+				end
+				return nil, err
+			end
 			goto again
 		end
 		return check()
@@ -1257,24 +1288,28 @@ do
 				end
 				socket.recv_thread = false
 			end
-			coro.transfer(thread)
+			coro.transfer(thread, true)
 		end
 	end
 
 	local function check_heap(heap, EXPIRES, THREAD, t)
 		if heap:length() > 0 then
-			repeat
+			while true do
 				local socket = heap:peek()
+				if not socket then
+					break
+				end
 				if math.abs(t - socket[EXPIRES]) <= .05 then --arbitrary threshold.
 					assert(heap:pop())
 					socket[EXPIRES] = nil
-					socket:close()
-					coro.transfer(socket[THREAD], nil, 'timeout')
+					local thread = socket[THREAD]
+					socket[THREAD] = false
+					coro.transfer(thread, nil, 'timeout')
 				else
 					--socket are popped in expire-order so no point looking beyond this.
 					break
 				end
-			until heap:length() == 0
+			end
 		end
 	end
 
