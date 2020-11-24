@@ -1097,7 +1097,7 @@ local send_expires_heap = heap.valueheap{
 }
 
 function M.sleep_until(t)
-	recv_heap:push({recv_expires = t, recv_thread = coro.running()})
+	recv_expires_heap:push({recv_expires = t, recv_thread = coro.running()})
 	wait()
 end
 
