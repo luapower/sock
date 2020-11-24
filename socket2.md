@@ -22,49 +22,57 @@ current stack based on [socket], [luasec], [socketloop], [nginx], [libcurl].
 
 ## API
 
-------------------------------------------------- ----------------------------
+------------------------------------------------------------ ----------------------------
 __address lookup__
-`socket.addr(...) -> ai`                          look-up a hostname
-`ai:free()`                                       free the address list
-`ai:next() -> ai|nil`                             get next address in list
-`ai:addrs() -> iter() -> ai`                      iterate addresses
-`ai:type() -> s`                                  socket type: 'tcp', ...
-`ai:family() -> s`                                address family: 'inet', ...
-`ai:protocol() -> s`                              protocol: 'tcp', 'icmp', ...
-`ai:name() -> s`                                  cannonical name
-`ai:tostring() -> s`                              formatted address
+`socket.addr(...) -> ai`                                     look-up a hostname
+`ai:free()`                                                  free the address list
+`ai:next() -> ai|nil`                                        get next address in list
+`ai:addrs() -> iter() -> ai`                                 iterate addresses
+`ai:type() -> s`                                             socket type: 'tcp', ...
+`ai:family() -> s`                                           address family: 'inet', ...
+`ai:protocol() -> s`                                         protocol: 'tcp', 'icmp', ...
+`ai:name() -> s`                                             cannonical name
+`ai:tostring() -> s`                                         formatted address
 __sockets__
-`socket.tcp([family][, protocol]) -> tcp`         make a TCP socket
-`socket.udp([family][, protocol]) -> udp`         make a UDP socket
-`socket.raw([family][, protocol]) -> raw`         make a RAW socket
-`s:type() -> s`                                   socket type
-`s:family() -> s`                                 address family
-`s:protocol() -> s`                               protocol
-`s:close()`                                       close connection and free socket
-`s:bind(addr | host,port)`                        bind socket to IP/port
-`s:setopt(opt, val)`                              set socket option (`so_*` or `tcp_*`)
-`s:getopt(opt) -> val`                            get socket option
+`socket.tcp([family][, protocol]) -> tcp`                    make a TCP socket
+`socket.udp([family][, protocol]) -> udp`                    make a UDP socket
+`socket.raw([family][, protocol]) -> raw`                    make a RAW socket
+`s:type() -> s`                                              socket type
+`s:family() -> s`                                            address family
+`s:protocol() -> s`                                          protocol
+`s:shutdown('r'|'w'|'rw', [expires]) -> s`                   send FIN
+`s:close()`                                                  send RST and free socket
+`s:bind(addr | host,port)`                                   bind socket to IP/port
+`s:setopt(opt, val)`                                         set socket option (`so_*` or `tcp_*`)
+`s:getopt(opt) -> val`                                       get socket option
 __TCP sockets__
-`tcp:listen(host, port, [backlog])`               put socket in listening mode
-`tcp:connect(addr | host,port)`                   connect
-`tcp:send(buf, maxlen) -> len`                    send bytes
-`tcp:recv(buf, maxlen) -> len`                    receive bytes
+`tcp:listen([backlog, ]host, port, [backlog])`               put socket in listening mode
+`tcp:connect(addr | host,port, [expires])`                   connect
+`tcp:accept([expires]) -> ctcp, remote_addr, local_addr`     accept a connection
+`tcp:send(buf, maxlen, [expires]) -> len`                    send bytes
+`tcp:recv(buf, maxlen, [expires]) -> len`                    receive bytes
 __UDP sockets__
-`udp:send(buf, maxlen, addr | host,port) -> len`  send a datagram to an address
-`udp:recv(buf, maxlen, addr | host,port) -> len`  receive a datagram from an adress
+`udp:send(buf, maxlen, addr | host,port, [expires]) -> len`  send a datagram to an address
+`udp:recv(buf, maxlen, addr | host,port, [expires]) -> len`  receive a datagram from an adress
 __scheduling__
-`socket.newthread(func) -> co`                    create a coroutine for async I/O
-`socket.poll(timeout) -> true | false,'timeout'`  poll for I/O
-`socket.start(timeout)`                           keep polling until timeout
-`socket.stop()`                                   stop polling
+`socket.newthread(func) -> co`                               create a coroutine for async I/O
+`socket.poll(max_timeout)->true| false,'timeout'`            poll for I/O
+`socket.start(max_poll_timeout)`                             keep polling until timeout
+`socket.stop()`                                              stop polling
+`socket.sleep_until(t)`                                      sleep without blocking until time.clock() value
+`socket.sleep(s)`                                            sleep without blocking for s seconds
 __multi-threading__
-`socket.iocp([iocp_h]) -> iocp_h`                 get/set IOCP handle (Windows)
-`socket.epoll_fd([epfd]) -> epfd`                 get/set epoll fd (Linux)
-------------------------------------------------- ----------------------------
+`socket.iocp([iocp_h]) -> iocp_h`                            get/set IOCP handle (Windows)
+`socket.epoll_fd([epfd]) -> epfd`                            get/set epoll fd (Linux)
+------------------------------------------------------------ ----------------------------
 
 All function return `nil, err, errcode` on error.
 
 I/O functions only work inside threads created with `socket.newthread()`.
+
+The optional `expires` arg controls the timeout of the operation and must be
+a time.clock() value. If the expiration clock is reached before the operation
+completes the socket is forcibly closed and `nil, 'timeout'` is returned.
 
 ## Address lookup
 
@@ -102,6 +110,20 @@ Make an UDP socket.
 
 Make a RAW socket.
 
+### `s:shutdown('r'|'w'|'rw')`
+
+Shutdown a socket for receiving, sending or both. Sends FIN to the peer.
+
+Required for lame protocols like HTTP with pipelining: a HTTP server
+that wants to close the connection before honoring all the received
+pipelined requests needs call `s:shutdown'w'` (which sends a FIN to the
+client) and then continue to receive (and discard) everything until
+a zero-length recv comes in (which is a FIN from the client, as a reply
+to the server's FIN) and only then it can close the connection without
+messing up the client, reason being that xalling close without shutdown
+sends a RST to the client which may cause it to discard received data
+before the RST and thus lose perfectly good data (that's TCP for you).
+
 ### `s:close()`
 
 Close the connection and free the socket.
@@ -118,25 +140,29 @@ Put the socket in listening mode, binding the socket if not bound already
 (in which case `host` and `port` args are ignored). The `backlog` defaults
 to `1/0` which means "use the maximum allowed".
 
-### `tcp:connect(addr | host,port)`
+### `tcp:connect(addr | host,port, [expires])`
 
 Connect to an address, binding the socket to `'*'` if not bound already.
 
-### `tcp:send(buf, maxlen) -> len`
+### `tcp:accept([expires]) -> ctcp, remote_addr, local_addr`
+
+Accept a connection.
+
+### `tcp:send(buf, maxlen, [expires]) -> len`
 
 Send bytes.
 
-### `tcp:recv(buf, maxlen) -> len`
+### `tcp:recv(buf, maxlen, [expires]) -> len`
 
 Receive bytes.
 
 ## UDP sockets
 
-### `udp:send(buf, maxlen, addr | host,port) -> len`
+### `udp:send(buf, maxlen, addr | host,port, [expires]) -> len`
 
 Send a datagram.
 
-### `udp:recv(buf, maxlen, addr | host,port) -> len`
+### `udp:recv(buf, maxlen, addr | host,port, [expires]) -> len`
 
 Receive a datagram.
 
@@ -170,6 +196,14 @@ or `stop()` was called.
 ### `socket.stop()`
 
 Tell the loop to stop dequeuing and return.
+
+### `socket.sleep_until(t)`
+
+Sleep until a time.clock() value without blocking other threads.
+
+### `socket.sleep(s)`
+
+Sleep `s` seconds without blocking other threads.
 
 ## Multi-threading
 

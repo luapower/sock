@@ -772,6 +772,11 @@ local expires_heap = heap.valueheap{
 	index_key = 'index', --enable O(log n) removal.
 }
 
+function M.sleep_until(t)
+	expires_heap:push({expires = t, thread = coro.running()})
+	wait()
+end
+
 local overlapped, free_overlapped, overlapped_empty
 do
 	local jobs = {} --{job1, ...}
@@ -830,7 +835,7 @@ do
 
 	function M.poll(max_timeout)
 
-		if overlapped_empty() then
+		if overlapped_empty() and expires_heap:length() == 0 then
 			return false, 'empty'
 		end
 
@@ -858,9 +863,13 @@ do
 							break
 						end
 						if math.abs(t - job.expires) <= .05 then --arbitrary threshold.
-							assert(check(ffi.C.CancelIoEx(
-								ffi.cast(void_ptr_c, job.socket.s),
-								job.overlapped.overlapped)))
+							if job.socket then
+								assert(check(ffi.C.CancelIoEx(
+									ffi.cast(void_ptr_c, job.socket.s),
+									job.overlapped.overlapped)))
+							else --sleep
+								coro.transfer(job.thread)
+							end
 							expires_heap:pop()
 							job.expires = nil
 						else
@@ -1087,6 +1096,11 @@ local send_expires_heap = heap.valueheap{
 	index_key = 'index', --enable O(log n) removal.
 }
 
+function M.sleep_until(t)
+	recv_heap:push({recv_expires = t, recv_thread = coro.running()})
+	wait()
+end
+
 local function make_async(for_writing, f, wait_errno)
 	return function(self, expires, ...)
 		::again::
@@ -1280,13 +1294,13 @@ do
 					assert(send_expires_heap:remove(socket))
 					socket.send_expires = nil
 				end
-				socket.send_thread = false
+				socket.send_thread = nil
 			else
 				if socket.recv_expires then
 					assert(recv_expires_heap:remove(socket))
 					socket.recv_expires = nil
 				end
-				socket.recv_thread = false
+				socket.recv_thread = nil
 			end
 			coro.transfer(thread, true)
 		end
@@ -1303,7 +1317,7 @@ do
 					assert(heap:pop())
 					socket[EXPIRES] = nil
 					local thread = socket[THREAD]
-					socket[THREAD] = false
+					socket[THREAD] = nil
 					coro.transfer(thread, nil, 'timeout')
 				else
 					--socket are popped in expire-order so no point looking beyond this.
@@ -1452,6 +1466,10 @@ M.thread = coro.running
 
 function M.suspend()
 	return coro.transfer(poll_thread)
+end
+
+function M.sleep(s)
+	return M.sleep_until(time.clock() + s)
 end
 
 function M.resume(thread, ...)
