@@ -40,7 +40,7 @@ __sockets__
 `s:type() -> s`                                                  socket type
 `s:family() -> s`                                                address family
 `s:protocol() -> s`                                              protocol
-`s:shutdown('r'|'w'|'rw', [expires]) -> s`                       send FIN
+`s:shutdown('r'|'w'|'rw', [expires])`                            send FIN
 `s:close()`                                                      send RST and free socket
 `s:bind(addr | host,port, [addr_flags])`                         bind socket to IP/port
 `s:setopt(opt, val)`                                             set socket option (`so_*` or `tcp_*`)
@@ -116,13 +116,14 @@ Shutdown a socket for receiving, sending or both. Sends FIN to the peer.
 
 Required for lame protocols like HTTP with pipelining: a HTTP server
 that wants to close the connection before honoring all the received
-pipelined requests needs call `s:shutdown'w'` (which sends a FIN to the
-client) and then continue to receive (and discard) everything until
-a zero-length recv comes in (which is a FIN from the client, as a reply
-to the server's FIN) and only then it can close the connection without
-messing up the client, reason being that xalling close without shutdown
-sends a RST to the client which may cause it to discard received data
-before the RST and thus lose perfectly good data (that's TCP for you).
+pipelined requests needs to call `s:shutdown'w'` (which sends a FIN to
+the client) and then continue to receive (and discard) everything until
+a zero-length recv comes in (which is a FIN from the client, as a reply to
+the FIN from the server) and only then it can close the connection without
+messing up the client, otherwise calling close without shutdown sends
+a RST to the client which may cause it to discard any data that it has
+received before the RST but that the client program hasn't read yet,
+and thus lose perfectly good data (that's TCP for you).
 
 ### `s:close()`
 
