@@ -1352,7 +1352,7 @@ ffi.cdef[[
 int shutdown(SOCKET s, int how);
 ]]
 
-function socket:shutdown(which)
+function tcp:shutdown(which)
 	return check(ffi.C.shutdown(self.s,
 		   which == 'r' and 0
 		or which == 'w' and 1

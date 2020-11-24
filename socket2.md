@@ -40,8 +40,7 @@ __sockets__
 `s:type() -> s`                                                  socket type
 `s:family() -> s`                                                address family
 `s:protocol() -> s`                                              protocol
-`s:shutdown('r'|'w'|'rw', [expires])`                            send FIN
-`s:close()`                                                      send RST and free socket
+`s:close()`                                                      send FIN and/or RST and free socket
 `s:bind(addr | host,port, [addr_flags])`                         bind socket to IP/port
 `s:setopt(opt, val)`                                             set socket option (`so_*` or `tcp_*`)
 `s:getopt(opt) -> val`                                           get socket option
@@ -51,6 +50,7 @@ __TCP sockets__
 `tcp:accept([expires]) -> ctcp, remote_addr, local_addr`         accept a connection
 `tcp:send(s|buf, [maxlen], [expires]) -> len`                    send bytes
 `tcp:recv(buf, maxlen, [expires]) -> len`                        receive bytes
+`tcp:shutdown('r'|'w'|'rw', [expires])`                          send FIN
 __UDP sockets__
 `udp:send(s|buf, [maxlen], addr | host,port, [expires]) -> len`  send a datagram to an address
 `udp:recv(buf, maxlen, addr | host,port, [expires]) -> len`      receive a datagram from an adress
@@ -110,24 +110,13 @@ Make an UDP socket.
 
 Make a RAW socket.
 
-### `s:shutdown('r'|'w'|'rw')`
-
-Shutdown a socket for receiving, sending or both. Sends FIN to the peer.
-
-Required for lame protocols like HTTP with pipelining: a HTTP server
-that wants to close the connection before honoring all the received
-pipelined requests needs to call `s:shutdown'w'` (which sends a FIN to
-the client) and then continue to receive (and discard) everything until
-a zero-length recv comes in (which is a FIN from the client, as a reply to
-the FIN from the server) and only then it can close the connection without
-messing up the client, otherwise calling close without shutdown sends
-a RST to the client which may cause it to discard any data that it has
-received before the RST but that the client program hasn't read yet,
-and thus lose perfectly good data (that's TCP for you).
-
 ### `s:close()`
 
 Close the connection and free the socket.
+
+If 1) there's unread incoming data (i.e. recv() hasn't returned 0 yet),
+or 2) `so_linger` socket option was set with a zero timeout, then a TCP RST
+packet is sent to the client, otherwise a FIN then a RST is sent.
 
 ### `s:bind(addr | [host],[port])`
 
@@ -166,6 +155,25 @@ Send a datagram.
 ### `udp:recv(buf, maxlen, addr | host,port, [expires]) -> len`
 
 Receive a datagram.
+
+### `tcp:shutdown('r'|'w'|'rw')`
+
+Shutdown the socket for receiving, sending or both. Does not block.
+
+Sends a TCP FIN packet to the peer to indicate refusal to send/receive
+any more data on the connection. A FIN from the peer can be detected
+by a zero-length read (which can't happen otherwise).
+
+Required for lame protocols like HTTP with pipelining: a HTTP server
+that wants to close the connection before honoring all the received
+pipelined requests needs to call `s:shutdown'w'` (which sends a FIN to
+the client) and then continue to receive (and discard) everything until
+a zero-length recv comes in (which is a FIN from the client, as a reply to
+the FIN from the server) and only then it can close the connection without
+messing up the client, otherwise calling close without shutdown may send
+a RST to the client which may cause it to discard any data that it has
+received _before the RST_ but that the client program _hasn't read yet_,
+and thus make the client lose perfectly good data (that's TCP for you).
 
 ## Scheduling
 
