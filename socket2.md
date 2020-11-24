@@ -114,9 +114,9 @@ Make a RAW socket.
 
 Close the connection and free the socket.
 
-If 1) there's unread incoming data (i.e. recv() hasn't returned 0 yet),
-or 2) `so_linger` socket option was set with a zero timeout, then a TCP RST
-packet is sent to the client, otherwise a FIN then a RST is sent.
+For TCP sockets, if 1) there's unread incoming data (i.e. recv() hasn't
+returned 0 yet), or 2) `so_linger` socket option was set with a zero timeout,
+then a TCP RST packet is sent to the client, otherwise a FIN is sent.
 
 ### `s:bind(addr | [host],[port])`
 
