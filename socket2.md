@@ -160,20 +160,23 @@ Receive a datagram.
 
 Shutdown the socket for receiving, sending or both. Does not block.
 
-Sends a TCP FIN packet to the peer to indicate refusal to send/receive
-any more data on the connection. A FIN from the peer can be detected
-by a zero-length read (which can't happen otherwise).
+Sends a TCP FIN packet to indicate refusal to send/receive any more data
+on the connection. The FIN packet is only sent after all the current pending
+data is sent (unlike RST which is sent immediately). A FIN from the peer
+can be detected by a zero-length read.
 
-Required for lame protocols like HTTP with pipelining: a HTTP server
+Calling close() without shutdown may send a RST (see the notes on `close()`
+for when that can happen) which may cause any data that is pending either
+on the sender side or on the receiving side to be discarded (that's how TCP
+works: RST has that data-cutting effect).
+
+Required for protocols like HTTP with pipelining: a HTTP server
 that wants to close the connection before honoring all the received
 pipelined requests needs to call `s:shutdown'w'` (which sends a FIN to
 the client) and then continue to receive (and discard) everything until
 a zero-length recv comes in (which is a FIN from the client, as a reply to
 the FIN from the server) and only then it can close the connection without
-messing up the client, otherwise calling close without shutdown may send
-a RST to the client which may cause it to discard any data that it has
-received _before the RST_ but that the client program _hasn't read yet_,
-and thus make the client lose perfectly good data (that's TCP for you).
+messing up the client.
 
 ## Scheduling
 
@@ -234,7 +237,6 @@ Get/set the global epoll fd (Linux).
 
 Epoll fds can be shared between OS threads and having a single epfd for all
 threads is more efficient for the kernel than having one epfd per thread.
-
 
 To share the epfd with another Lua state running on a different thread,
 get the epfd with `socket.epoll_fd()`, copy it over to the other state,
