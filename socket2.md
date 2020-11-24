@@ -239,4 +239,3 @@ threads is more efficient for the kernel than having one epfd per thread.
 To share the epfd with another Lua state running on a different thread,
 get the epfd with `socket.epoll_fd()`, copy it over to the other state,
 then set it with `socket.epoll_fd(copied_epfd)`.
-
