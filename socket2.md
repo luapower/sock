@@ -8,8 +8,8 @@ on Windows, epoll on Linux and kqueue on OSX.
 
 Replace LuaSocket which doesn't scale being select()-based, and improve on
 other aspects too (single file, nothing to compile, use cdata buffers instead
-of strings, don't bundle undelated modules, [coro]-based async only, support
-multi-threading).
+of strings, don't bundle unrelated modules, [coro]-based async only,
+multi-threading support).
 
 ## Status
 
@@ -66,7 +66,9 @@ __multi-threading__
 `socket.epoll_fd([epfd]) -> epfd`                                get/set epoll fd (Linux)
 ---------------------------------------------------------------- ----------------------------
 
-All function return `nil, err, errcode` on error.
+All function return `nil, err, errcode` on error. Some error messages
+are normalized across platforms, like 'access_denied' and 'address_already_in_use'
+so they can be used as conditionals.
 
 I/O functions only work inside threads created with `socket.newthread()`.
 
@@ -162,20 +164,20 @@ Shutdown the socket for receiving, sending or both. Does not block.
 
 Sends a TCP FIN packet to indicate refusal to send/receive any more data
 on the connection. The FIN packet is only sent after all the current pending
-data is sent (unlike RST which is sent immediately). A FIN from the peer
-can be detected by a zero-length read.
+data is sent (unlike RST which is sent immediately). When a FIN is received
+recv() returns `nil,'closed'`.
 
 Calling close() without shutdown may send a RST (see the notes on `close()`
 for when that can happen) which may cause any data that is pending either
 on the sender side or on the receiving side to be discarded (that's how TCP
 works: RST has that data-cutting effect).
 
-Required for protocols like HTTP with pipelining: a HTTP server
+Required for lame protocols like HTTP with pipelining: a HTTP server
 that wants to close the connection before honoring all the received
 pipelined requests needs to call `s:shutdown'w'` (which sends a FIN to
 the client) and then continue to receive (and discard) everything until
-a zero-length recv comes in (which is a FIN from the client, as a reply to
-the FIN from the server) and only then it can close the connection without
+a `nil,'closed'` recv comes in (which is a FIN from the client, as a reply
+to the FIN from the server) and only then it can close the connection without
 messing up the client.
 
 ## Scheduling

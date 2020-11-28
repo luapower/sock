@@ -494,6 +494,7 @@ do
 
 	local error_classes = {
 		[10013] = 'access_denied',
+		[10048] = 'address_already_in_use',
 	}
 
 	function check(ret, err)
@@ -955,6 +956,7 @@ do
 	local flagsbuf = ffi.new'DWORD[1]'
 
 	local function io_done(job, n)
+		if n == 0 then return nil, 'closed' end
 		return n
 	end
 
@@ -1074,7 +1076,8 @@ local function make_async(for_writing, f, wait_errno)
 	return function(self, expires, ...)
 		::again::
 		local ret = f(self, ...)
-		if ret >= 0 then return ret end
+		if ret == 0 then return nil, 'closed' end
+		if ret > 0 then return ret end
 		if ffi.errno() == wait_errno then
 			if for_writing then
 				self.send_expires = expires
@@ -1391,7 +1394,10 @@ function tcp:listen(backlog, host, port, addr_flags)
 		backlog, host, port = 1/0, backlog, host
 	end
 	if not self._bound then
-		self:bind(host, port, addr_flags)
+		local ok, err, errcode = self:bind(host, port, addr_flags)
+		if not ok then
+			return nil, err, errcode
+		end
 	end
 	backlog = glue.clamp(backlog or 1/0, 0, 0x7fffffff)
 	local ok = C.listen(self.s, backlog) == 0
