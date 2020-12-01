@@ -753,7 +753,11 @@ do
 end
 
 function socket:close()
-	return check(C.closesocket(self.s) == 0)
+	if self.closed then return true end
+	local ok, err, errcode = check(C.closesocket(self.s) == 0)
+	if not ok then return ok, err, errcode end
+	self.closed = true
+	return true
 end
 
 local expires_heap = heap.valueheap{
@@ -1045,9 +1049,13 @@ local SOCK_NONBLOCK = Linux and tonumber(4000, 8)
 end
 
 function socket:close()
+	if self.closed then return true end
 	local ok, err, errcode = unregister_socket(self)
-	if not ok then return nil, err, errcode end
-	return check(C.close(self.s) == 0)
+	if not ok then return ok, err, errcode end
+	local ok, err, errcode = check(C.close(self.s) == 0)
+	if not ok then return ok, err, errcode end
+	self.closed = true
+	return true
 end
 
 local EWOULDBLOCK = 11 --alias of EAGAIN in Linux
@@ -1421,6 +1429,9 @@ glue.update(raw, socket)
 
 --coroutine-based scheduler --------------------------------------------------
 
+M.cosafewrap = coro.safewrap
+M.thread = coro.running
+
 local poll_thread
 local wait_count = 0
 
@@ -1450,30 +1461,30 @@ function M.newthread(handler, ...)
 		if not ok then error(err, 2) end
 		coro.transfer(poll_thread)
 	end)
-	local real_poll_thread = poll_thread
-	poll_thread = coro.running() --make it get back here the first time.
-	coro.transfer(thread, ...)
-	poll_thread = real_poll_thread
+	M.resume(thread, ...)
 	return thread
 end
 
-M.thread = coro.running
-
-function M.suspend()
-	return coro.transfer(poll_thread)
+function M.suspend(...)
+	return coro.transfer(poll_thread, ...)
 end
 
 function M.sleep(s)
 	return M.sleep_until(time.clock() + s)
 end
 
-function M.resume(thread, ...)
-	local poll_thread0 = poll_thread
-	--change poll_thread temporarily so that we get back here
-	--on the first call to suspend().
-	poll_thread = coro.running()
-	coro.transfer(thread, ...)
-	poll_thread = poll_thread0
+do
+	local function pass(real_poll_thread, ...)
+		poll_thread = real_poll_thread
+		return ...
+	end
+	function M.resume(thread, ...)
+		local real_poll_thread = poll_thread
+		--change poll_thread temporarily so that we get back here
+		--from suspend() or from I/O.
+		poll_thread = coro.running()
+		return pass(real_poll_thread, coro.transfer(thread, ...))
+	end
 end
 
 local stop = false

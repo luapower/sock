@@ -103,7 +103,6 @@ local function checkio(self, expires, tls_ret, tls_err)
 		--print('<recv', len, err, errcode)
 		if not len then
 			if err == 'closed' then
-				print('TLS RECV ARG 0')
 				len = 0
 			else
 				return false, len, err, errcode
@@ -118,7 +117,6 @@ local function checkio(self, expires, tls_ret, tls_err)
 		--print('<send', len, err, errcode)
 		if not len then
 			if err == 'closed' then
-				print('TLS SEND ARG 0')
 				len = 0
 			else
 				return false, len, err, errcode
@@ -127,7 +125,6 @@ local function checkio(self, expires, tls_ret, tls_err)
 		cb_w_buf, cb_w_sz, cb_w_len = buf, sz, len
 		return true
 	elseif tls_ret == 0 then
-		print('TLS RET 0')
 		return false, nil, 'closed'
 	else
 		return false, tls_ret, tls_err
@@ -156,16 +153,20 @@ function client_stcp:shutdown(mode)
 	return self.tcp:shutdown(mode)
 end
 
-function client_stcp:close()
-	if not self.tls
-		then return true
+function client_stcp:close(expires)
+	if self.closed then return true end
+	cb_r_buf = nil
+	cb_w_buf = nil
+	while true do
+		local recall, ret, err, errcode = checkio(self, expires, self.tls:close())
+		if not recall then return ret, err, errcode end
 	end
-	local ret, err = self.tls:close()
 	self.tcp:close()
 	self.tls:free()
 	self.tls = nil
 	self.tcp = nil
-	return ret, err
+	self.closed = true
+	return true
 end
 
 server_stcp.close = client_stcp.close
