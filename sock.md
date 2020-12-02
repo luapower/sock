@@ -1,5 +1,5 @@
 
-## `local socket = require'socket2'`
+## `local sock = require'sock'`
 
 Portable coroutine-based async socket API. For scheduling it uses IOCP
 on Windows, epoll on Linux and kqueue on OSX.
@@ -14,11 +14,6 @@ multi-threading support).
 ## Status
 
 <warn>Alpha (Windows & Linux)</warn>
-
-The plan here is to create a new ffi-based networking stack for LuaJIT based
-on [socket2], [coro], [http], [bearssl], [libtls], [libtls_bearssl] to replace the
-current stack based on [socket], [luasec], [socketloop], [nginx], [libcurl].
-
 
 ## API
 

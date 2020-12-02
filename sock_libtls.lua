@@ -4,7 +4,7 @@ if not ... then require'http_server_test'; return end
 --secure sockets with libtls.
 --Written by Cosmin Apreutesei. Public Domain.
 
-require'socket2' --not used directly, but it is a dependency.
+require'sock' --not used directly, but it is a dependency.
 local tls = require'libtls'
 local ffi = require'ffi'
 local C = tls.C

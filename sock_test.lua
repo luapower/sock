@@ -4,13 +4,13 @@ io.stderr:setvbuf'no'
 
 local glue = require'glue'
 local thread = require'thread'
-local socket = require'socket2'
+local sock = require'sock'
 local ffi = require'ffi'
 local coro = require'coro'
 
 local function test_addr()
 	local function dump(...)
-		for ai in assert(socket.addr(...)):addrs() do
+		for ai in assert(sock.addr(...)):addrs() do
 			print(ai:tostring(), ai:type(), ai:family(), ai:protocol(), ai:name())
 		end
 	end
@@ -21,7 +21,7 @@ local function test_addr()
 end
 
 local function test_sockopt()
-	local s = assert(socket.tcp())
+	local s = assert(sock.tcp())
 	for _,k in ipairs{
 		'so_acceptconn        ',
 		'so_broadcast         ',
@@ -101,17 +101,17 @@ end
 
 local function start_server()
 	local server_thread = thread.new(function()
-		local socket = require'socket2'
+		local sock = require'sock'
 		local coro = require'coro'
-		local s = assert(socket.tcp())
+		local s = assert(sock.tcp())
 		assert(s:listen('*', 8090))
-		socket.newthread(function()
+		sock.newthread(function()
 			while true do
 				print'...'
 				local cs, ra, la = assert(s:accept())
 				print('accepted', cs, ra:tostring(), ra:port(), la and la:tostring(), la and la:port())
 				print('accepted_thread', coro.running())
-				socket.newthread(function()
+				sock.newthread(function()
 					print'closing cs'
 					--cs:recv(buf, len)
 					assert(cs:close())
@@ -121,10 +121,10 @@ local function start_server()
 			end
 			s:close()
 		end)
-		print(socket.start())
+		print(sock.start())
 	end)
 
-	-- local s = assert(socket.tcp())
+	-- local s = assert(sock.tcp())
 	-- --assert(s:bind('127.0.0.1', 8090))
 	-- print(s:connect('127.0.0.1', '8080'))
 	-- --assert(s:send'hello')
@@ -134,22 +134,22 @@ local function start_server()
 end
 
 local function start_client()
-	local s = assert(socket.tcp())
-	socket.newthread(function()
+	local s = assert(sock.tcp())
+	sock.newthread(function()
 		print'...'
 		print(assert(s:connect(ffi.abi'win' and '10.8.1.130' or '10.8.2.153', 8090)))
 		print(assert(s:send'hello'))
 		print(assert(s:close()))
-		socket.stop()
+		sock.stop()
 	end)
-	print(socket.start())
+	print(sock.start())
 end
 
 local function test_http()
 
-	socket.newthread(function()
+	sock.newthread(function()
 
-		local s = assert(socket.tcp())
+		local s = assert(sock.tcp())
 		print('connect', s:connect(ffi.abi'win' and '127.0.0.1' or '10.8.2.153', 80))
 		print('send', s:send'GET / HTTP/1.0\r\n\r\n')
 		local buf = ffi.new'char[4096]'
@@ -163,7 +163,7 @@ local function test_http()
 
 	end)
 
-	print('start', socket.start(1))
+	print('start', sock.start(1))
 
 end
 

@@ -4,7 +4,7 @@
 
 if not ... then
 	require'http_client_test'
-	--require'socket2_test'
+	--require'sock_test'
 	; return
 end
 
