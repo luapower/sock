@@ -154,22 +154,28 @@ function client_stcp:shutdown(mode)
 end
 
 function client_stcp:close(expires)
-	if self.closed then return true end
+	if self._closed then return true end
+	self._closed = true --close barrier.
 	cb_r_buf = nil
 	cb_w_buf = nil
-	while true do
-		local recall, ret, err, errcode = checkio(self, expires, self.tls:close())
-		if not recall then return ret, err, errcode end
-	end
-	self.tcp:close()
+	local recall, tls_ok, tls_err, tls_errcode
+	repeat
+		recall, tls_ok, tls_err, tls_errcode = checkio(self, expires, self.tls:close())
+	until not recall
 	self.tls:free()
+	local tcp_ok, tcp_err, tcp_errcode = self.tcp:close()
 	self.tls = nil
 	self.tcp = nil
-	self.closed = true
-	return true
+	if not tls_ok then return false, tls_err, tls_errcode end
+	if not tcp_ok then return false, tcp_err, tcp_errcode end
 end
 
-server_stcp.close = client_stcp.close
+function client_stcp:closed()
+	return self._closed or false
+end
+
+server_stcp.close  = client_stcp.close
+server_stcp.closed = client_stcp.closed
 
 M.config = tls.config
 

@@ -753,11 +753,13 @@ do
 end
 
 function socket:close()
-	if self.closed then return true end
-	local ok, err, errcode = check(C.closesocket(self.s) == 0)
-	if not ok then return ok, err, errcode end
-	self.closed = true
-	return true
+	if not self.s then return true end
+	local s = self.s; self.s = nil --unsafe to close twice no matter the error.
+	return check(C.closesocket(s) == 0)
+end
+
+function socket:closed()
+	return not self.s
 end
 
 local expires_heap = heap.valueheap{
@@ -1049,13 +1051,14 @@ local SOCK_NONBLOCK = Linux and tonumber(4000, 8)
 end
 
 function socket:close()
-	if self.closed then return true end
-	local ok, err, errcode = unregister_socket(self)
-	if not ok then return ok, err, errcode end
-	local ok, err, errcode = check(C.close(self.s) == 0)
-	if not ok then return ok, err, errcode end
-	self.closed = true
-	return true
+	if not self.s then return true end
+	unregister_socket(self)
+	local s = self.s; self.s = nil --unsafe to close twice no matter the error.
+	return check(C.close(s) == 0)
+end
+
+function socket:closed()
+	return not self.s
 end
 
 local EWOULDBLOCK = 11 --alias of EAGAIN in Linux
