@@ -5,12 +5,14 @@ if not ... then require'http_server_test'; return end
 --Written by Cosmin Apreutesei. Public Domain.
 
 require'sock' --not used directly, but it is a dependency.
+local glue = require'glue'
 local tls = require'libtls'
 local ffi = require'ffi'
 local C = tls.C
 
-local client_stcp = {type = 's2tls_tcp_client_socket'}
-local server_stcp = {type = 's2tls_tcp_server_socket'}
+local stcp = {issocket = true, istcpsocket = true, istlssocket = true}
+local client_stcp = {}
+local server_stcp = {}
 local M = {}
 
 local cb_r_buf, cb_r_sz, cb_r_len
@@ -18,13 +20,15 @@ local cb_w_buf, cb_w_sz, cb_w_len
 
 local read_cb = ffi.cast('tls_read_cb', function(self, buf, sz)
 	sz = tonumber(sz)
-	--print('tls_read_cb', buf, sz, cb_r_buf)
 	if cb_r_buf == nil then
+		--print('r cb !', self, buf, sz)
 		cb_r_buf = buf
 		cb_r_sz  = sz
 		return C.TLS_WANT_POLLIN
 	else
+		--print('r cb >', self, cb_r_buf, cb_r_sz, 'now', buf, sz, 'len', cb_r_len)
 		assert(cb_r_buf == buf)
+		assert(cb_r_sz  == sz)
 		assert(cb_r_len <= sz)
 		cb_r_buf = nil
 		return cb_r_len
@@ -33,13 +37,15 @@ end)
 
 local write_cb = ffi.cast('tls_write_cb', function(self, buf, sz)
 	sz = tonumber(sz)
-	--print('tls_write_cb', buf, sz, cb_w_buf)
 	if cb_w_buf == nil then
+		--print('w cb !', self, buf, sz)
 		cb_w_buf = buf
 		cb_w_sz  = sz
 		return C.TLS_WANT_POLLOUT
 	else
+		--print('w cb >', self, cb_w_buf, cb_w_sz, 'now', buf, sz, 'len', cb_w_len)
 		assert(cb_w_buf == buf)
+		assert(cb_w_sz  == sz)
 		assert(cb_w_len <= sz)
 		cb_w_buf = nil
 		return cb_w_len
@@ -56,12 +62,10 @@ function M.client_stcp(tcp, servername, opt)
 		tls:free()
 		return nil, err
 	end
-	local stcp = {
+	return glue.object(client_stcp, {
 		tcp = tcp,
 		tls = tls,
-		__index = client_stcp,
-	}
-	return setmetatable(stcp, stcp)
+	})
 end
 
 function M.server_stcp(tcp, opt)
@@ -69,12 +73,10 @@ function M.server_stcp(tcp, opt)
 	if not tls then
 		return nil, err
 	end
-	local stcp = {
+	return glue.object(server_stcp, {
 		tcp = tcp,
 		tls = tls,
-		__index = server_stcp,
-	}
-	return setmetatable(stcp, stcp)
+	})
 end
 
 function server_stcp:accept()
@@ -86,21 +88,21 @@ function server_stcp:accept()
 	if not ctls then
 		return nil, err
 	end
-	local stcp = {
+	return glue.object(client_stcp, {
 		tcp = ctcp,
 		tls = ctls,
-		__index = client_stcp,
-	}
-	return setmetatable(stcp, stcp)
+	})
 end
 
 local function checkio(self, expires, tls_ret, tls_err)
-	--print('checkio', tls_ret, tls_err)
 	if tls_err == 'wantrecv' then
 		local buf, sz = cb_r_buf, cb_r_sz
-		--print('>recv', buf, sz)
+		local t1, t2, t3 = cb_w_buf, cb_w_sz, cb_w_len
+		if cb_w_buf then
+			assert(false) --TODO: full-duplex protocol
+		end
 		local len, err, errcode = self.tcp:recv(buf, sz, expires)
-		--print('<recv', len, err, errcode)
+		cb_w_buf, cb_w_sz, cb_w_len = t1, t2, t3
 		if not len then
 			if err == 'closed' then
 				len = 0
@@ -112,9 +114,12 @@ local function checkio(self, expires, tls_ret, tls_err)
 		return true
 	elseif tls_err == 'wantsend' then
 		local buf, sz = cb_w_buf, cb_w_sz
-		--print('>send', buf, sz)
+		local t1, t2, t3 = cb_r_buf, cb_r_sz, cb_r_len
+		if cb_r_buf then
+			assert(false) --TODO: full-duplex protocol
+		end
 		local len, err, errcode = self.tcp:send(buf, sz, expires)
-		--print('<send', len, err, errcode)
+		cb_r_buf, cb_r_sz, cb_r_len = t1, t2, t3
 		if not len then
 			if err == 'closed' then
 				len = 0
@@ -132,19 +137,25 @@ local function checkio(self, expires, tls_ret, tls_err)
 end
 
 function client_stcp:recv(buf, sz, expires)
+	if self._closed then return nil, 'closed' end
 	cb_r_buf = nil
 	cb_w_buf = nil
 	while true do
+		--print('RECV > ', self.tls, sz)
 		local recall, ret, err, errcode = checkio(self, expires, self.tls:recv(buf, sz))
+		--print('RECV - ', self.tls, recall, ret, err)
 		if not recall then return ret, err, errcode end
 	end
 end
 
 function client_stcp:send(buf, sz, expires)
+	if self._closed then return nil, 'closed' end
 	cb_r_buf = nil
 	cb_w_buf = nil
 	while true do
+		--print('SEND > ', self.tls, sz)
 		local recall, ret, err, errcode = checkio(self, expires, self.tls:send(buf, sz))
+		--print('SEND - ', self.tls, recall, ret, err)
 		if not recall then return ret, err, errcode end
 	end
 end
@@ -153,7 +164,7 @@ function client_stcp:shutdown(mode)
 	return self.tcp:shutdown(mode)
 end
 
-function client_stcp:close(expires)
+function stcp:close(expires)
 	if self._closed then return true end
 	self._closed = true --close barrier.
 	cb_r_buf = nil
@@ -168,14 +179,19 @@ function client_stcp:close(expires)
 	self.tcp = nil
 	if not tls_ok then return false, tls_err, tls_errcode end
 	if not tcp_ok then return false, tcp_err, tcp_errcode end
+	return true
 end
 
-function client_stcp:closed()
+function stcp:closed()
 	return self._closed or false
 end
 
-server_stcp.close  = client_stcp.close
-server_stcp.closed = client_stcp.closed
+function stcp:shutdown(mode, expires)
+	return self:close(expires)
+end
+
+glue.update(client_stcp, stcp)
+glue.update(server_stcp, stcp)
 
 M.config = tls.config
 

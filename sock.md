@@ -19,7 +19,7 @@ multi-threading support).
 
 ---------------------------------------------------------------- ----------------------------
 __address lookup__
-`socket.addr(...) -> ai`                                         look-up a hostname
+`sock.addr(...) -> ai`                                           look-up a hostname
 `ai:free()`                                                      free the address list
 `ai:next() -> ai|nil`                                            get next address in list
 `ai:addrs() -> iter() -> ai`                                     iterate addresses
@@ -29,9 +29,9 @@ __address lookup__
 `ai:name() -> s`                                                 cannonical name
 `ai:tostring() -> s`                                             formatted address
 __sockets__
-`socket.tcp([family][, protocol]) -> tcp`                        make a TCP socket
-`socket.udp([family][, protocol]) -> udp`                        make a UDP socket
-`socket.raw([family][, protocol]) -> raw`                        make a RAW socket
+`sock.tcp([family][, protocol]) -> tcp`                          make a TCP socket
+`sock.udp([family][, protocol]) -> udp`                          make a UDP socket
+`sock.raw([family][, protocol]) -> raw`                          make a RAW socket
 `s:type() -> s`                                                  socket type
 `s:family() -> s`                                                address family
 `s:protocol() -> s`                                              protocol
@@ -50,22 +50,23 @@ __UDP sockets__
 `udp:send(s|buf, [maxlen], addr | host,port, [expires]) -> len`  send a datagram to an address
 `udp:recv(buf, maxlen, addr | host,port, [expires]) -> len`      receive a datagram from an adress
 __scheduling__
-`socket.newthread(func) -> co`                                   create a coroutine for async I/O
-`socket.poll()`                                                  poll for I/O
-`socket.start()`                                                 keep polling until all threads finish
-`socket.stop()`                                                  stop polling
-`socket.sleep_until(t)`                                          sleep without blocking until time.clock() value
-`socket.sleep(s)`                                                sleep without blocking for s seconds
+`sock.newthread(func) -> co`                                     create a coroutine for async I/O
+`sock.currentthread() -> thread`                                 get running thread
+`sock.poll()`                                                    poll for I/O
+`sock.start()`                                                   keep polling until all threads finish
+`sock.stop()`                                                    stop polling
+`sock.sleep_until(t)`                                            sleep without blocking until time.clock() value
+`sock.sleep(s)`                                                  sleep without blocking for s seconds
 __multi-threading__
-`socket.iocp([iocp_h]) -> iocp_h`                                get/set IOCP handle (Windows)
-`socket.epoll_fd([epfd]) -> epfd`                                get/set epoll fd (Linux)
+`sock.iocp([iocp_h]) -> iocp_h`                                  get/set IOCP handle (Windows)
+`sock.epoll_fd([epfd]) -> epfd`                                  get/set epoll fd (Linux)
 ---------------------------------------------------------------- ----------------------------
 
 All function return `nil, err, errcode` on error. Some error messages
 are normalized across platforms, like 'access_denied' and 'address_already_in_use'
 so they can be used as conditionals.
 
-I/O functions only work inside threads created with `socket.newthread()`.
+I/O functions only work inside threads created with `sock.newthread()`.
 
 The optional `expires` arg controls the timeout of the operation and must be
 a time.clock() value. If the expiration clock is reached before the operation
@@ -73,7 +74,7 @@ completes the socket is forcibly closed and `nil, 'timeout'` is returned.
 
 ## Address lookup
 
-### `socket.addr(...) -> ai`
+### `sock.addr(...) -> ai`
 
 The args can be either an existing `ai` object which is passed through, or:
 
@@ -95,15 +96,15 @@ where
 
 ## Sockets
 
-### `socket.tcp([family][, protocol]) -> tcp`
+### `sock.tcp([family][, protocol]) -> tcp`
 
 Make a TCP socket.
 
-### `socket.udp([family][, protocol]) -> udp`
+### `sock.udp([family][, protocol]) -> udp`
 
 Make an UDP socket.
 
-### `socket.raw([family][, protocol]) -> raw`
+### `sock.raw([family][, protocol]) -> raw`
 
 Make a RAW socket.
 
@@ -180,7 +181,7 @@ messing up the client.
 Scheduling is based on synchronous coroutines provided by [coro] which
 allows coroutine-based iterators that perform socket I/O to be written.
 
-### `socket.newthread(func) -> co`
+### `sock.newthread(func) -> co`
 
 Create a coroutine for performing async I/O. The coroutine starts immediately
 and transfers control back to the _parent thread_ inside the first async
@@ -190,33 +191,33 @@ the loop thread.
 Full-duplex I/O on a socket can be achieved by performing reads in one thread
 and all writes in another.
 
-### `socket.poll(timeout) -> true | false,'timeout'`
+### `sock.poll(timeout) -> true | false,'timeout'`
 
 Poll for the next I/O event and resume the coroutine that waits for it.
 
 Timeout is in seconds with anything beyond 2^31-1 taken as infinte
 and defaults to infinite.
 
-### `socket.start(timeout)`
+### `sock.start(timeout)`
 
 Start polling. Stops after the timeout expires and there's no more I/O
 or `stop()` was called.
 
-### `socket.stop()`
+### `sock.stop()`
 
 Tell the loop to stop dequeuing and return.
 
-### `socket.sleep_until(t)`
+### `sock.sleep_until(t)`
 
 Sleep until a time.clock() value without blocking other threads.
 
-### `socket.sleep(s)`
+### `sock.sleep(s)`
 
 Sleep `s` seconds without blocking other threads.
 
 ## Multi-threading
 
-### `socket.iocp([iocp_handle]) -> iocp_handle`
+### `sock.iocp([iocp_handle]) -> iocp_handle`
 
 Get/set the global IOCP handle (Windows).
 
@@ -225,10 +226,10 @@ threads (as opposed to having one IOCP per thread/Lua state) enables the
 kernel to better distribute the completion events between threads.
 
 To share the IOCP with another Lua state running on a different thread,
-get the IOCP handle with `socket.iocp()`, copy it over to the other state,
-then set it with `socket.iocp(copied_iocp)`.
+get the IOCP handle with `sock.iocp()`, copy it over to the other state,
+then set it with `sock.iocp(copied_iocp)`.
 
-### `socket.epoll_fd([epfd]) -> epfd`
+### `sock.epoll_fd([epfd]) -> epfd`
 
 Get/set the global epoll fd (Linux).
 
@@ -236,5 +237,5 @@ Epoll fds can be shared between OS threads and having a single epfd for all
 threads is more efficient for the kernel than having one epfd per thread.
 
 To share the epfd with another Lua state running on a different thread,
-get the epfd with `socket.epoll_fd()`, copy it over to the other state,
-then set it with `socket.epoll_fd(copied_epfd)`.
+get the epfd with `sock.epoll_fd()`, copy it over to the other state,
+then set it with `sock.epoll_fd(copied_epfd)`.

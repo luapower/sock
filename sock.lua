@@ -17,7 +17,7 @@ local coro = require'coro'
 local time = require'time'
 
 local push = table.insert
-local pop = table.remove
+local pop  = table.remove
 
 local Windows = ffi.os == 'Windows'
 local Linux   = ffi.os == 'Linux'
@@ -29,9 +29,9 @@ local C = Windows and ffi.load'ws2_32' or ffi.C
 local M = {C = C}
 
 local socket = {issocket = true} --common socket methods
-local tcp = {} --methods of tcp sockets
-local udp = {} --methods of udp sockets
-local raw = {} --methods of raw sockets
+local tcp = {istcpsocket = true} --methods of tcp sockets
+local udp = {isudpsocket = true} --methods of udp sockets
+local raw = {israwsocket = true} --methods of raw sockets
 
 --forward declarations
 local check, poll, wait, create_socket, wrap_socket
@@ -953,7 +953,11 @@ do
 		local ok = AcceptEx(self.s, client_s.s, accept_buf, 0, sa_len, sa_len, nbuf, o) == 1
 		local ok, err, errcode = check_pending(ok, job)
 		if not ok then return nil, err, errcode end
-		return client_s, accept_buf.remote_addr, accept_buf.local_addr
+		client_s.remote_addr = accept_buf.remote_addr:addr():tostring()
+		client_s.remote_port = accept_buf.remote_addr:port()
+		client_s. local_addr = accept_buf. local_addr:addr():tostring()
+		client_s. local_port = accept_buf. local_addr:port()
+		return client_s
 	end
 
 	local wsabuf = ffi.new'WSABUF'
@@ -1367,7 +1371,7 @@ int shutdown(SOCKET s, int how);
 ]]
 
 function tcp:shutdown(which)
-	return check(ffi.C.shutdown(self.s,
+	return check(C.shutdown(self.s,
 		   which == 'r' and 0
 		or which == 'w' and 1
 		or (not which or which == 'rw' and 2)))
@@ -1433,7 +1437,7 @@ glue.update(raw, socket)
 --coroutine-based scheduler --------------------------------------------------
 
 M.cosafewrap = coro.safewrap
-M.thread = coro.running
+M.currentthread = coro.running
 
 local poll_thread
 local wait_count = 0
