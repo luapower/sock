@@ -1461,15 +1461,13 @@ function M.poll()
 	return poll()
 end
 
-function M.newthread(handler, ...)
+function M.newthread(handler)
 	--wrap handler so that it terminates in current poll_thread.
-	local thread = coro.create(function(...)
+	return coro.create(function(...)
 		local ok, err = glue.pcall(handler, ...) --last chance to get stacktrace.
 		if not ok then error(err, 2) end
 		coro.transfer(poll_thread)
 	end)
-	M.resume(thread, ...)
-	return thread
 end
 
 function M.suspend(...)
@@ -1488,7 +1486,7 @@ do
 	function M.resume(thread, ...)
 		local real_poll_thread = poll_thread
 		--change poll_thread temporarily so that we get back here
-		--from suspend() or from I/O.
+		--from suspend() or from wait().
 		poll_thread = coro.running()
 		return pass(real_poll_thread, coro.transfer(thread, ...))
 	end

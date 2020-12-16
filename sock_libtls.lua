@@ -21,12 +21,10 @@ local cb_w_buf, cb_w_sz, cb_w_len
 local read_cb = ffi.cast('tls_read_cb', function(self, buf, sz)
 	sz = tonumber(sz)
 	if cb_r_buf == nil then
-		--print('r cb !', self, buf, sz)
 		cb_r_buf = buf
 		cb_r_sz  = sz
 		return C.TLS_WANT_POLLIN
 	else
-		--print('r cb >', self, cb_r_buf, cb_r_sz, 'now', buf, sz, 'len', cb_r_len)
 		assert(cb_r_buf == buf)
 		assert(cb_r_sz  == sz)
 		assert(cb_r_len <= sz)
@@ -38,12 +36,10 @@ end)
 local write_cb = ffi.cast('tls_write_cb', function(self, buf, sz)
 	sz = tonumber(sz)
 	if cb_w_buf == nil then
-		--print('w cb !', self, buf, sz)
 		cb_w_buf = buf
 		cb_w_sz  = sz
 		return C.TLS_WANT_POLLOUT
 	else
-		--print('w cb >', self, cb_w_buf, cb_w_sz, 'now', buf, sz, 'len', cb_w_len)
 		assert(cb_w_buf == buf)
 		assert(cb_w_sz  == sz)
 		assert(cb_w_len <= sz)
@@ -141,9 +137,7 @@ function client_stcp:recv(buf, sz, expires)
 	cb_r_buf = nil
 	cb_w_buf = nil
 	while true do
-		--print('RECV > ', self.tls, sz)
 		local recall, ret, err, errcode = checkio(self, expires, self.tls:recv(buf, sz))
-		--print('RECV - ', self.tls, recall, ret, err)
 		if not recall then return ret, err, errcode end
 	end
 end
@@ -153,9 +147,7 @@ function client_stcp:send(buf, sz, expires)
 	cb_r_buf = nil
 	cb_w_buf = nil
 	while true do
-		--print('SEND > ', self.tls, sz)
 		local recall, ret, err, errcode = checkio(self, expires, self.tls:send(buf, sz))
-		--print('SEND - ', self.tls, recall, ret, err)
 		if not recall then return ret, err, errcode end
 	end
 end
