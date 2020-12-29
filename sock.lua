@@ -11,10 +11,10 @@ end
 local ffi = require'ffi'
 local bit = require'bit'
 
-local glue = require'glue'
-local heap = require'heap'
-local coro = require'coro'
-local time = require'time'
+local glue  = require'glue'
+local heap  = require'heap'
+local coro  = require'coro'
+local clock = require'time'.clock
 
 local push = table.insert
 local pop  = table.remove
@@ -175,14 +175,13 @@ do
 
 	function M.addr(host, port, socket_type, family, protocol, flags)
 		if host == nil or host == '*' then host = '0.0.0.0' end --all.
-		if host == false then host = nil end --loopback.
 		if port == nil then port = 0 end --all.
 		if ffi.istype(addrinfo_ct, host) then
 			return host, true --pass-through and return "not owned" flag
 		elseif type(host) == 'table' then
 			local t = host
 			host, port, family, socket_type, protocol, flags =
-				t.host, t.port, t.family, t.socket_type, t.protocol, t.flags
+				t.host, t.port or port, t.family, t.socket_type, t.protocol, t.flags
 		end
 		ffi.fill(hints, ffi.sizeof(hints))
 		hints.socktype_num, hints.family_num, hints.protocol_num
@@ -831,7 +830,7 @@ do
 	--[[local]] function poll()
 
 		local job = expires_heap:peek()
-		local timeout = job and math.max(0, job.expires - time.clock()) or 1/0
+		local timeout = job and math.max(0, job.expires - clock()) or 1/0
 
 		local timeout_ms = math.max(timeout * 1000, 0)
 		--we're going infinite after 0x7fffffff for compat. with Linux.
@@ -845,7 +844,7 @@ do
 			local err = C.WSAGetLastError()
 			if err == WAIT_TIMEOUT then
 				--cancel all timed-out jobs.
-				local t = time.clock()
+				local t = clock()
 				while true do
 					local job = expires_heap:peek()
 					if not job then
@@ -928,11 +927,11 @@ do
 			local ok, err, errcode = self:bind()
 			if not ok then return nil, err, errcode end
 		end
-		local ai, err, errcode = self:addr(host, port, addr_flags)
-		if not ai then return nil, err, errcode end
+		local ai, ext_ai, errcode = self:addr(host, port, addr_flags)
+		if not ai then return nil, ext_ai, errcode end
 		local o, job = overlapped(self, return_true, expires)
 		local ok = ConnectEx(self.s, ai.addr, ai.addrlen, nil, 0, nil, o) == 1
-		if not err then ai:free() end
+		if not ext_ai then ai:free() end
 		return check_pending(ok, job)
 	end
 
@@ -950,7 +949,7 @@ do
 		local client_s, err, errcode = M.tcp(self._af, self._pr)
 		if not client_s then return nil, err, errcode end
 		local o, job = overlapped(self, return_true, expires)
-		local ok = AcceptEx(self.s, client_s.s, accept_buf, 0, sa_len, sa_len, nbuf, o) == 1
+		local ok = AcceptEx(self.s, client_s.s, accept_buf, 0, sa_len, sa_len, nil, o) == 1
 		local ok, err, errcode = check_pending(ok, job)
 		if not ok then return nil, err, errcode end
 		client_s.remote_addr = accept_buf.remote_addr:addr():tostring()
@@ -974,18 +973,18 @@ do
 		wsabuf.buf = type(buf) == 'string' and ffi.cast(pchar_t, buf) or buf
 		wsabuf.len = len or #buf
 		local o, job = overlapped(self, io_done, expires)
-		local ok = C.WSASend(self.s, wsabuf, 1, nbuf, 0, o, nil) == 0
+		local ok = C.WSASend(self.s, wsabuf, 1, nil, 0, o, nil) == 0
 		return check_pending(ok, job)
 	end
 
 	function udp:send(buf, len, host, port, expires, flags, addr_flags)
-		local ai, err, errcode = self:addr(host, port, addr_flags)
-		if not ai then return nil, err, errcode end
+		local ai, ext_ai, errcode = self:addr(host, port, addr_flags)
+		if not ai then return nil, ext_ai, errcode end
 		wsabuf.buf = type(buf) == 'string' and ffi.cast(pchar_t, buf) or buf
 		wsabuf.len = len or #buf
 		local o, job = overlapped(self, io_done, expires)
-		local ok = C.WSASendTo(self.s, wsabuf, 1, nbuf, flags, ai.addr, ai.addrlen, o, nil) == 0
-		ai:free()
+		local ok = C.WSASendTo(self.s, wsabuf, 1, nil, flags or 0, ai.addr, ai.addrlen, o, nil) == 0
+		if not ext_ai then ai:free() end
 		return check_pending(ok, job)
 	end
 
@@ -994,19 +993,19 @@ do
 		wsabuf.len = len
 		local o, job = overlapped(self, io_done, expires)
 		flagsbuf[0] = 0
-		local ok = C.WSARecv(self.s, wsabuf, 1, nbuf, flagsbuf, o, nil) == 0
+		local ok = C.WSARecv(self.s, wsabuf, 1, nil, flagsbuf, o, nil) == 0
 		return check_pending(ok, job)
 	end
 
 	function udp:recv(buf, len, host, port, expires, flags, addr_flags)
-		local ai, err, errcode = self:addr(host, port, addr_flags)
-		if not ai then return nil, err, errcode end
+		local ai, ext_ai, errcode = self:addr(host, port, addr_flags)
+		if not ai then return nil, ext_ai, errcode end
 		wsabuf.buf = buf
 		wsabuf.len = len
 		local o, job = overlapped(self, io_done, expires)
-		flagsbuf[0] = flags
-		local ok = C.WSARecvFrom(self.s, wsabuf, 1, nbuf, flagsbuf, ai.addr, ai.addrlen, o, nil) == 0
-		ai:free()
+		flagsbuf[0] = flags or 0
+		local ok = C.WSARecvFrom(self.s, wsabuf, 1, nil, flagsbuf, nil, nil, o, nil) == 0
+		if not ext_ai then ai:free() end
 		return check_pending(ok, job)
 	end
 end
@@ -1320,7 +1319,7 @@ do
 		local sx = ss and ss.send_expires
 		local rx = rs and rs.recv_expires
 		local expires = math.min(sx or 1/0, rx or 1/0)
-		local timeout = expires < 1/0 and math.max(0, expires - time.clock()) or 1/0
+		local timeout = expires < 1/0 and math.max(0, expires - clock()) or 1/0
 
 		local timeout_ms = math.max(timeout * 1000, 0)
 		if timeout_ms > 0x7fffffff then timeout_ms = -1 end --infinite
@@ -1336,7 +1335,7 @@ do
 			return true
 		elseif n == 0 then
 			--handle timed-out ops.
-			local t = time.clock()
+			local t = clock()
 			check_heap(send_expires_heap, 'send_expires', 'send_thread', t)
 			check_heap(recv_expires_heap, 'recv_expires', 'recv_thread', t)
 			return true
@@ -1420,6 +1419,35 @@ function tcp:listen(backlog, host, port, addr_flags)
 	return true
 end
 
+--tcp send-all & recv-all ----------------------------------------------------
+
+local char_ptr_t = ffi.typeof'char*'
+
+function tcp:sendall(buf, sz, expires)
+	if type(buf) == 'string' then
+		assert(not sz or sz <= #buf)
+		sz = sz or #buf
+		buf = ffi.cast(char_ptr_t, buf)
+	end
+	while sz > 0 do
+		local len, err, errcode = self:send(buf, sz, expires)
+		if not len then return nil, err, errcode end
+		buf = buf + len
+		sz  = sz  - len
+	end
+	return true
+end
+
+function tcp:recvall(buf, sz, expires)
+	while sz > 0 do
+		local len, err, errcode = self:recv(buf, sz, expires)
+		if not len then return nil, err, errcode end
+		buf = buf + len
+		sz  = sz  - len
+	end
+	return true
+end
+
 --hi-level API ---------------------------------------------------------------
 
 --[[local]] function wrap_socket(class, s, st, af, pr)
@@ -1475,7 +1503,7 @@ function M.suspend(...)
 end
 
 function M.sleep(s)
-	return M.sleep_until(time.clock() + s)
+	return M.sleep_until(clock() + s)
 end
 
 do

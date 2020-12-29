@@ -45,6 +45,8 @@ __TCP sockets__
 `tcp:accept([expires]) -> ctcp, remote_addr, local_addr`         accept a connection
 `tcp:send(s|buf, [maxlen], [expires]) -> len`                    send bytes
 `tcp:recv(buf, maxlen, [expires]) -> len`                        receive bytes
+`tcp:sendall(s|buf, [len]) -> true`                              send n bytes
+`tcp:recvall(buf, len, [expires]) -> true`                       receive n bytes
 `tcp:shutdown('r'|'w'|'rw', [expires])`                          send FIN
 __UDP sockets__
 `udp:send(s|buf, [maxlen], addr | host,port, [expires]) -> len`  send a datagram to an address
@@ -82,10 +84,10 @@ The args can be either an existing `ai` object which is passed through, or:
 
 where
 
-  * `host` can be a hostname, ip address, `'*'` (the default) which means
-  `'0.0.0.0'` aka "all interfaces" or `false` which means `'127.0.0.1'`.
-  * `port` can be a port number or a service name and defaults to `0`
-  which means "any available port".
+  * `host` can be a hostname, ip address or `'*'` (the default) which means
+  `'0.0.0.0'` aka "all interfaces".
+  * `port` can be a port number or a service name or 0 (the default) which
+  means "any available port".
   * `socket_type` must be `'tcp'`, `'udp'` or `'raw'`.
   * `family` can be `'inet'`, `'inet6'` or `'unix'` (defaults to `'inet'`).
   * `protocol` can be `'ip'`, `'ipv6'`, `'tcp'`, `'udp'`, `'raw'`, `'icmp'`,
@@ -136,21 +138,21 @@ Connect to an address, binding the socket to `'*'` if not bound already.
 
 Accept a connection.
 
-### `tcp:send(s|buf, [maxlen], [expires]) -> len`
+### `tcp:send(s|buf, [maxlen], [expires], [flags]) -> len`
 
 Send bytes.
 
-### `tcp:recv(buf, maxlen, [expires]) -> len`
+### `tcp:recv(buf, maxlen, [expires], [flags]) -> len`
 
 Receive bytes.
 
 ## UDP sockets
 
-### `udp:send(s|buf, [maxlen], addr | host,port, [expires]) -> len`
+### `udp:send(s|buf, [maxlen], addr | host,port, [expires], [flags], [addr_flags]) -> len`
 
 Send a datagram.
 
-### `udp:recv(buf, maxlen, addr | host,port, [expires]) -> len`
+### `udp:recv(buf, maxlen, addr | host,port, [expires], [flags], [addr_flags]) -> len`
 
 Receive a datagram.
 
