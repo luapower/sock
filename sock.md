@@ -28,29 +28,34 @@ __address lookup__
 `ai:protocol() -> s`                                             protocol: 'tcp', 'icmp', ...
 `ai:name() -> s`                                                 cannonical name
 `ai:tostring() -> s`                                             formatted address
+`ai.addr -> sa`                                                  address object
+`sa:family() -> s`                                               address family: 'inet', ...
+`sa:port() -> n`                                                 address port
+`sa:tostring() -> s`                                             'ip:port'
+`sa:addr() -> ip`                                                IP address object
+`ip:tobinary() -> uint8_t[4|16], 4|16`                           IP address in binary form
+`ip:tostring() -> s`                                             IP address in string form
 __sockets__
 `sock.tcp([family][, protocol]) -> tcp`                          make a TCP socket
 `sock.udp([family][, protocol]) -> udp`                          make a UDP socket
-`sock.raw([family][, protocol]) -> raw`                          make a RAW socket
-`s:type() -> s`                                                  socket type
-`s:family() -> s`                                                address family
-`s:protocol() -> s`                                              protocol
+`sock.raw([family][, protocol]) -> raw`                          make a raw socket
+`s:type() -> s`                                                  socket type: 'tcp', ...
+`s:family() -> s`                                                address family: 'inet', ...
+`s:protocol() -> s`                                              protocol: 'tcp', 'icmp', ...
 `s:close()`                                                      send FIN and/or RST and free socket
-`s:bind(addr | host,port, [addr_flags])`                         bind socket to IP/port
-`s:setopt(opt, val)`                                             set socket option (`so_*` or `tcp_*`)
+`s:bind([host], [port], [af])`                                   bind socket to an address
+`s:setopt(opt, val)`                                             set socket option (`'so_*'` or `'tcp_*'`)
 `s:getopt(opt) -> val`                                           get socket option
-__TCP sockets__
-`tcp:listen([backlog, ]addr | host,port, [addr_flags])`          put socket in listening mode
-`tcp:connect(addr | host,port, [expires])`                       connect
-`tcp:accept([expires]) -> ctcp, remote_addr, local_addr`         accept a connection
-`tcp:send(s|buf, [maxlen], [expires]) -> len`                    send bytes
-`tcp:recv(buf, maxlen, [expires]) -> len`                        receive bytes
+`tcp|udp:connect(host, port, [expires], [af], ...)`              connect to an address
+`tcp|udp:send(s|buf, [maxlen], [expires]) -> len`                send bytes
+`tcp|udp:recv(buf, maxlen, [expires]) -> len`                    receive bytes
+`tcp:listen([backlog, ]host, port, [af])`                        put socket in listening mode
+`tcp:accept([expires]) -> ctcp`                                  accept a client connection
 `tcp:sendall(s|buf, [len]) -> true`                              send n bytes
 `tcp:recvall(buf, len, [expires]) -> true`                       receive n bytes
+`udp:sendto(host, port, s|buf, [len], [expires], [af]) -> len`   send a datagram to an address
+`udp:recvnext(buf, maxlen, [expires], [flags]) -> len, sa`       receive the next datagram
 `tcp:shutdown('r'|'w'|'rw', [expires])`                          send FIN
-__UDP sockets__
-`udp:send(s|buf, [maxlen], addr | host,port, [expires]) -> len`  send a datagram to an address
-`udp:recv(buf, maxlen, addr | host,port, [expires]) -> len`      receive a datagram from an adress
 __scheduling__
 `sock.newthread(func) -> co`                                     create a coroutine for async I/O
 `sock.currentthread() -> thread`                                 get running thread
@@ -71,8 +76,13 @@ so they can be used as conditionals.
 I/O functions only work inside threads created with `sock.newthread()`.
 
 The optional `expires` arg controls the timeout of the operation and must be
-a time.clock() value. If the expiration clock is reached before the operation
-completes the socket is forcibly closed and `nil, 'timeout'` is returned.
+a `sock.clock()`-relative value (which is in seconds). If the expiration clock
+is reached before the operation completes the socket is forcibly closed
+and `nil, 'timeout'` is returned.
+
+`host, port` args are passed to `sock.addr()` (with the optional `af` arg),
+which means that an already resolved address can be passed as `ai, nil`
+in place of `host, port`.
 
 ## Address lookup
 
@@ -80,19 +90,18 @@ completes the socket is forcibly closed and `nil, 'timeout'` is returned.
 
 The args can be either an existing `ai` object which is passed through, or:
 
-  * `[host], [port], socket_type, [family], [protocol], [flags]`
+  * `host, port, [socket_type], [family], [protocol], [af]`
 
 where
 
-  * `host` can be a hostname, ip address or `'*'` (the default) which means
-  `'0.0.0.0'` aka "all interfaces".
-  * `port` can be a port number or a service name or 0 (the default) which
-  means "any available port".
-  * `socket_type` must be `'tcp'`, `'udp'` or `'raw'`.
-  * `family` can be `'inet'`, `'inet6'` or `'unix'` (defaults to `'inet'`).
+  * `host` can be a hostname, ip address or `'*'` which means "all interfaces".
+  * `port` can be a port number, a service name or `0` which means "any available port".
+  * `socket_type` can be `'tcp'`, `'udp'`, `'raw'` or `0` (the default, meaning "all").
+  * `family` can be `'inet'`, `'inet6'` or `'unix'` or `0` (the default, meaning "all").
   * `protocol` can be `'ip'`, `'ipv6'`, `'tcp'`, `'udp'`, `'raw'`, `'icmp'`,
-  `'igmp'` or `'icmpv6'` (default is based on socket type).
-  * flags are a [glue.bor()][glue] list of `passive`, `cannonname`,
+  `'igmp'` or `'icmpv6'` or `0` (the default is either `'tcp'`, `'udp'`
+  or `'raw'`, based on socket type).
+  * `af` are a [glue.bor()][glue] list of `passive`, `cannonname`,
     `numerichost`, `numericserv`, `all`, `v4mapped`, `addrconfig`
     which map to `getaddrinfo()` flags.
 
@@ -100,15 +109,15 @@ where
 
 ### `sock.tcp([family][, protocol]) -> tcp`
 
-Make a TCP socket.
+Make a TCP socket. The default family is `'inet'`.
 
 ### `sock.udp([family][, protocol]) -> udp`
 
-Make an UDP socket.
+Make an UDP socket. The default family is `'inet'`.
 
 ### `sock.raw([family][, protocol]) -> raw`
 
-Make a RAW socket.
+Make a raw socket. The default family is `'inet'`.
 
 ### `s:close()`
 
@@ -118,43 +127,55 @@ For TCP sockets, if 1) there's unread incoming data (i.e. recv() hasn't
 returned 0 yet), or 2) `so_linger` socket option was set with a zero timeout,
 then a TCP RST packet is sent to the client, otherwise a FIN is sent.
 
-### `s:bind(addr | [host],[port])`
+### `s:bind([host], [port], [af])`
 
-Bind socket to an interface/port.
+Bind socket to an interface/port (which default to '*' and 0 respectively
+meaning all interfaces and a random port).
 
-## TCP sockets
+### `tcp|udp:connect(host, port, [expires], [af])`
 
-### `tcp:listen([backlog, ]addr | [host],[port])`
+Connect to an address, binding the socket to `('*', 0)` if not bound already.
+
+For UDP sockets, this has the effect of filtering incoming packets so that
+only those coming from the connected address get through the socket. Also,
+you can call connect() multiple times (use `('*', 0)` to switch back to
+unfiltered mode).
+
+### `tcp|udp:send(s|buf, [maxlen], [expires], [flags]) -> len`
+
+Send bytes to the connected address.
+
+### `tcp|udp:recv(buf, maxlen, [expires], [flags]) -> len`
+
+Receive bytes from the connected address.
+
+### `tcp:listen([backlog, ]host, port, [af])`
 
 Put the socket in listening mode, binding the socket if not bound already
 (in which case `host` and `port` args are ignored). The `backlog` defaults
 to `1/0` which means "use the maximum allowed".
 
-### `tcp:connect(addr | host,port, [expires])`
-
-Connect to an address, binding the socket to `'*'` if not bound already.
-
 ### `tcp:accept([expires]) -> ctcp, remote_addr, local_addr`
 
-Accept a connection.
+Accept a client connection.
 
-### `tcp:send(s|buf, [maxlen], [expires], [flags]) -> len`
+### `tcp:sendall(s|buf, [len]) -> true`
 
-Send bytes.
+Repeat send until all bytes are send.
 
-### `tcp:recv(buf, maxlen, [expires], [flags]) -> len`
+### `tcp:recvall(buf, len, [expires]) -> true`
 
-Receive bytes.
+Repeat recv until `len` bytes are received.
 
-## UDP sockets
+### `udp:sendto(host, port, s|buf, [maxlen], [expires], [flags], [af]) -> len`
 
-### `udp:send(s|buf, [maxlen], addr | host,port, [expires], [flags], [addr_flags]) -> len`
+Send a datagram to a specific destination, regardless of whether the socket
+is connected or not.
 
-Send a datagram.
+### `udp:recvnext(buf, maxlen, [expires], [flags]) -> len, sa`
 
-### `udp:recv(buf, maxlen, addr | host,port, [expires], [flags], [addr_flags]) -> len`
-
-Receive a datagram.
+Receive the next incoming datagram, wherever it came from, along with the
+source address. If the socket is connected, packets are still filtered though.
 
 ### `tcp:shutdown('r'|'w'|'rw')`
 
