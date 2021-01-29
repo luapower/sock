@@ -88,6 +88,8 @@ in place of `host, port`.
 
 ### `sock.addr(...) -> ai`
 
+Look-up a hostname. Returns an "address info" object which is a OS-allocated
+linked list of one or more addresses resolved with the system's `getaddrinfo()`.
 The args can be either an existing `ai` object which is passed through, or:
 
   * `host, port, [socket_type], [family], [protocol], [af]`
@@ -104,6 +106,8 @@ where
   * `af` are a [glue.bor()][glue] list of `passive`, `cannonname`,
     `numerichost`, `numericserv`, `all`, `v4mapped`, `addrconfig`
     which map to `getaddrinfo()` flags.
+
+NOTE: `getaddrinfo()` is blocking. If that's a problem, use [resolver].
 
 ## Sockets
 
