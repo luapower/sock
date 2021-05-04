@@ -1021,7 +1021,7 @@ do
 	local int_buf_ct = ffi.typeof'int[1]'
 	local sa_buf_len = ffi.sizeof(sockaddr_ct)
 
-	function udp:recvnext(buf, len, host, port, expires, flags)
+	function udp:recvnext(buf, len, expires, flags)
 		wsabuf.buf = buf
 		wsabuf.len = len
 		local o, job = overlapped(self, io_done, expires)
@@ -1503,6 +1503,7 @@ glue.update(raw, socket)
 
 M.cosafewrap = coro.safewrap
 M.currentthread = coro.running
+M.threadstatus = coro.status
 
 local poll_thread
 local wait_count = 0

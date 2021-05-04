@@ -64,6 +64,8 @@ __scheduling__
 `sock.stop()`                                                    stop polling
 `sock.sleep_until(t)`                                            sleep without blocking until time.clock() value
 `sock.sleep(s)`                                                  sleep without blocking for s seconds
+`sock.suspend(...) -> ...`                                       suspend current thread
+`sock.resume(thread, ...)`                                       resume thread
 __multi-threading__
 `sock.iocp([iocp_h]) -> iocp_h`                                  get/set IOCP handle (Windows)
 `sock.epoll_fd([epfd]) -> epfd`                                  get/set epoll fd (Linux)
