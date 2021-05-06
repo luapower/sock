@@ -1532,6 +1532,9 @@ function M.newthread(handler, name)
 	local thread = coro.create(function(...)
 		local ok, err = glue.pcall(handler, ...) --last chance to get stacktrace.
 		if not ok then error(err, 2) end
+		if name then
+			coro.name(thread, false)
+		end
 		coro.transfer(poll_thread)
 	end)
 	if name then
@@ -1566,7 +1569,9 @@ local stop = false
 function M.stop() stop = true end
 function M.start()
 	poll_thread = coro.running()
-	coro.name(poll_thread, 'poll')
+	if not coro.name(poll_thread) then
+		coro.name(poll_thread, 'poll')
+	end
 	repeat
 		local ret, err, errcode = M.poll()
 		if not ret then
