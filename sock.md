@@ -57,15 +57,17 @@ __sockets__
 `udp:recvnext(buf, maxlen, [expires], [flags]) -> len, sa`       receive the next datagram
 `tcp:shutdown('r'|'w'|'rw', [expires])`                          send FIN
 __scheduling__
-`sock.newthread(func) -> co`                                     create a coroutine for async I/O
-`sock.currentthread() -> thread`                                 get running thread
+`sock.newthread(func[, name]) -> co`                             create a coroutine for async I/O
+`sock.resume(thread, ...) -> ...`                                resume thread
+`sock.suspend(...) -> ...`                                       suspend thread
+`sock.cosafewrap(f) -> wrapper`                                  see coro.safewrap()
+`sock.currentthread() -> co`                                     see coro.running()
+`sock.transfer(co, ...) -> ...`                                  see coro.transfer()
 `sock.poll()`                                                    poll for I/O
 `sock.start()`                                                   keep polling until all threads finish
 `sock.stop()`                                                    stop polling
 `sock.sleep_until(t)`                                            sleep without blocking until time.clock() value
 `sock.sleep(s)`                                                  sleep without blocking for s seconds
-`sock.suspend(...) -> ...`                                       suspend current thread
-`sock.resume(thread, ...)`                                       resume thread
 __multi-threading__
 `sock.iocp([iocp_h]) -> iocp_h`                                  get/set IOCP handle (Windows)
 `sock.epoll_fd([epfd]) -> epfd`                                  get/set epoll fd (Linux)
@@ -212,13 +214,23 @@ allows coroutine-based iterators that perform socket I/O to be written.
 
 ### `sock.newthread(func) -> co`
 
-Create a coroutine for performing async I/O. The coroutine starts immediately
-and transfers control back to the _parent thread_ inside the first async
-I/O operation. When the coroutine finishes, the control is transfered to
-the loop thread.
+Create a coroutine for performing async I/O. The coroutine must be resumed
+to start. When the coroutine finishes, the control is transfered to
+the I/O thread (the thread that called `start()`).
 
 Full-duplex I/O on a socket can be achieved by performing reads in one thread
-and all writes in another.
+and writes in another.
+
+### `sock.resume(thread, ...)`
+
+Resume a thread, which means transfer control to it, but also temporarily
+change the I/O thread to be this thread so that the first suspending call
+(send, recv, sleep, suspend, etc.) gives control back to this thread.
+This is _the_ trick to starting multiple threads before starting polling.
+
+### `sock.suspend(...) -> ...`
+
+Suspend current thread, transfering to the polling thread (but also see resume()).
 
 ### `sock.poll(timeout) -> true | false,'timeout'`
 

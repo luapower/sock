@@ -1503,7 +1503,7 @@ glue.update(raw, socket)
 
 M.cosafewrap = coro.safewrap
 M.currentthread = coro.running
-M.threadstatus = coro.status
+M.transfer = coro.transfer
 
 local poll_thread
 local wait_count = 0
@@ -1527,13 +1527,17 @@ function M.poll()
 	return poll()
 end
 
-function M.newthread(handler)
+function M.newthread(handler, name)
 	--wrap handler so that it terminates in current poll_thread.
-	return coro.create(function(...)
+	local thread = coro.create(function(...)
 		local ok, err = glue.pcall(handler, ...) --last chance to get stacktrace.
 		if not ok then error(err, 2) end
 		coro.transfer(poll_thread)
 	end)
+	if name then
+		coro.name(thread, name)
+	end
+	return thread
 end
 
 function M.suspend(...)
@@ -1562,6 +1566,7 @@ local stop = false
 function M.stop() stop = true end
 function M.start()
 	poll_thread = coro.running()
+	coro.name(poll_thread, 'poll')
 	repeat
 		local ret, err, errcode = M.poll()
 		if not ret then
