@@ -1535,7 +1535,7 @@ function M.newthread(handler, name)
 		if name then
 			coro.name(thread, false)
 		end
-		return coro.finish(poll_thread, ...)
+		return coro.transfer(poll_thread, ...)
 	end)
 	if name then
 		coro.name(thread, name)
