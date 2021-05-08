@@ -813,7 +813,7 @@ do
 			ffi.fill(o, ffi.sizeof(OVERLAPPED))
 			return o, job
 		else
-			local job = {s = s, done = done, expires = expires}
+			local job = {socket = socket, done = done, expires = expires}
 			local o = overlapped_ct()
 			job.overlapped = o
 			push(jobs, job)
@@ -1503,20 +1503,23 @@ glue.update(raw, socket)
 
 M.cosafewrap = coro.safewrap
 M.currentthread = coro.running
-M.transfer = coro.transfer
 
 local poll_thread
 local wait_count = 0
+local waiting = setmetatable({}, {__mode = 'k'}) --{thread -> true}
 
 do
-	local function pass(...)
+	local function pass(thread, ...)
 		wait_count = wait_count - 1
+		waiting[thread] = nil
 		return ...
 	end
 	--[[local]] function wait()
-		assert(coro.running() ~= poll_thread, 'trying to I/O from the main thread')
+		local thread = coro.running()
+		assert(thread ~= poll_thread, 'trying to I/O from the main thread')
 		wait_count = wait_count + 1
-		return pass(coro.transfer(poll_thread))
+		waiting[thread] = true
+		return pass(thread, coro.transfer(poll_thread))
 	end
 end
 
@@ -1551,18 +1554,21 @@ function M.sleep(s)
 	return M.sleep_until(clock() + s)
 end
 
-do
-	local function pass(real_poll_thread, ...)
-		poll_thread = real_poll_thread
-		return ...
-	end
-	function M.resume(thread, ...)
-		local real_poll_thread = poll_thread
-		--change poll_thread temporarily so that we get back here
-		--from suspend() or from wait().
-		poll_thread = coro.running()
-		return pass(real_poll_thread, coro.transfer(thread, ...))
-	end
+local function resume_pass(real_poll_thread, ...)
+	poll_thread = real_poll_thread
+	return ...
+end
+function M.resume(thread, ...)
+	local real_poll_thread = poll_thread
+	--change poll_thread temporarily so that we get back here
+	--from suspend() or from wait().
+	poll_thread = coro.running()
+	return resume_pass(real_poll_thread, M.transfer(thread, ...))
+end
+
+function M.transfer(thread, ...)
+	assert(not waiting[thread], 'attempt to resume a thread that is waiting on I/O')
+	return coro.transfer(thread, ...)
 end
 
 local stop = false
