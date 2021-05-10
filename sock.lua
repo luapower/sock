@@ -1588,4 +1588,9 @@ function M.start()
 	return true
 end
 
+function M.run(f)
+	M.resume(M.newthread(f))
+	M.start()
+end
+
 return M
