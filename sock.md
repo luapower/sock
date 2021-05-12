@@ -60,6 +60,7 @@ __scheduling__
 `sock.newthread(func[, name]) -> co`                             create a coroutine for async I/O
 `sock.resume(thread, ...) -> ...`                                resume thread
 `sock.suspend(...) -> ...`                                       suspend thread
+`sock.thread(func, ...) -> co`                                   create thread and resume
 `sock.cosafewrap(f) -> wrapper`                                  see coro.safewrap()
 `sock.currentthread() -> co`                                     see coro.running()
 `sock.transfer(co, ...) -> ...`                                  see coro.transfer()
