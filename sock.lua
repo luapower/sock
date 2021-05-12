@@ -1566,31 +1566,52 @@ function M.resume(thread, ...)
 	return resume_pass(real_poll_thread, M.transfer(thread, ...))
 end
 
+function M.thread(...)
+	return M.resume(M.newthread(...))
+end
+
 function M.transfer(thread, ...)
 	assert(not waiting[thread], 'attempt to resume a thread that is waiting on I/O')
 	return coro.transfer(thread, ...)
 end
 
 local stop = false
+local running = false
 function M.stop() stop = true end
 function M.start()
+	if running then
+		return
+	end
 	poll_thread = coro.running()
 	repeat
+		running = true
 		local ret, err, errcode = M.poll()
 		if not ret then
-			if err == 'empty' then
-				M.stop()
-			else
+			M.stop()
+			if err ~= 'empty' then
+				running = false
+				stop = false
 				return ret, err, errcode
 			end
 		end
 	until stop
+	running = false
+	stop = false
 	return true
 end
 
-function M.run(f)
-	M.resume(M.newthread(f))
-	M.start()
+function M.run(f, ...)
+	if running then
+		return f(...)
+	else
+		local ret
+		local function wrapper(...)
+			ret = glue.pack(f(...))
+		end
+		M.thread(wrapper, ...)
+		assert(M.start())
+		return ret and glue.unpack(ret)
+	end
 end
 
 return M

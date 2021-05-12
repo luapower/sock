@@ -66,7 +66,7 @@ __scheduling__
 `sock.poll()`                                                    poll for I/O
 `sock.start()`                                                   keep polling until all threads finish
 `sock.stop()`                                                    stop polling
-`sock.run(f)`                                                    run a function with I/O
+`sock.run(f, ...) -> ...`                                        run a function with I/O
 `sock.sleep_until(t)`                                            sleep without blocking until time.clock() value
 `sock.sleep(s)`                                                  sleep without blocking for s seconds
 __multi-threading__
