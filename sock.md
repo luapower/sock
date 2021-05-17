@@ -165,9 +165,10 @@ Put the socket in listening mode, binding the socket if not bound already
 (in which case `host` and `port` args are ignored). The `backlog` defaults
 to `1/0` which means "use the maximum allowed".
 
-### `tcp:accept([expires]) -> ctcp, remote_addr, local_addr`
+### `tcp:accept([expires]) -> ctcp`
 
-Accept a client connection.
+Accept a client connection. The connection socket has additional fields:
+`remote_addr`, `remote_port`, `local_addr`, `local_port`.
 
 ### `tcp:sendall(s|buf, [len]) -> true`
 
