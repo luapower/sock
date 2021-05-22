@@ -1179,8 +1179,10 @@ do
 	end
 end
 
+local MSG_NOSIGNAL = Linux and 0x4000 or nil
+
 local socket_send = make_async(true, function(self, buf, len, flags)
-	return C.send(self.s, buf, len or #buf, flags or 0)
+	return C.send(self.s, buf, len or #buf, flags or MSG_NOSIGNAL)
 end, EWOULDBLOCK)
 
 function socket:send(buf, len, expires, flags)
