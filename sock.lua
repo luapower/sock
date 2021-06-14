@@ -41,6 +41,10 @@ local function str(s, len)
 	return ffi.string(s, len)
 end
 
+local currentthread = coro.running
+local transfer = coro.transfer
+local transfer_to_poll_thread --fw. decl.
+
 --getaddrinfo() --------------------------------------------------------------
 
 ffi.cdef[[
@@ -782,7 +786,7 @@ local expires_heap = heap.valueheap{
 }
 
 function M.sleep_until(t)
-	expires_heap:push({expires = t, thread = coro.running()})
+	expires_heap:push({expires = t, thread = currentthread()})
 	wait()
 end
 
@@ -869,7 +873,7 @@ do
 								ffi.cast(void_ptr_c, job.socket.s),
 								job.overlapped.overlapped)))
 						else --sleep
-							coro.transfer(job.thread)
+							transfer(job.thread)
 						end
 						expires_heap:pop()
 						job.expires = nil
@@ -891,16 +895,16 @@ do
 				if job.expires then
 					assert(expires_heap:remove(job))
 				end
-				coro.transfer(job.thread, job:done(n))
+				transfer(job.thread, job:done(n))
 			else
 				local err = C.WSAGetLastError()
 				if err == ERROR_OPERATION_ABORTED then --canceled
-					coro.transfer(job.thread, nil, 'timeout')
+					transfer(job.thread, nil, 'timeout')
 				else
 					if job.expires then
 						assert(expires_heap:remove(job))
 					end
-					coro.transfer(job.thread, check(nil, err))
+					transfer(job.thread, check(nil, err))
 				end
 			end
 			return true
@@ -924,7 +928,7 @@ do
 			if job.expires then
 				expires_heap:push(job)
 			end
-			job.thread = coro.running()
+			job.thread = currentthread()
 			return check_timeout(job, wait())
 		end
 		return check()
@@ -1108,7 +1112,7 @@ local send_expires_heap = heap.valueheap{
 }
 
 function M.sleep_until(t)
-	recv_expires_heap:push({recv_expires = t, recv_thread = coro.running()})
+	recv_expires_heap:push({recv_expires = t, recv_thread = currentthread()})
 	wait()
 end
 
@@ -1124,13 +1128,13 @@ local function make_async(for_writing, f, wait_errno)
 				if expires then
 					send_expires_heap:push(self)
 				end
-				self.send_thread = coro.running()
+				self.send_thread = currentthread()
 			else
 				self.recv_expires = expires
 				if expires then
 					recv_expires_heap:push(self)
 				end
-				self.recv_thread = coro.running()
+				self.recv_thread = currentthread()
 			end
 			local ok, err = wait()
 			if not ok then
@@ -1325,7 +1329,7 @@ do
 				end
 				socket.recv_thread = nil
 			end
-			coro.transfer(thread, true)
+			transfer(thread, true)
 		end
 	end
 
@@ -1340,7 +1344,7 @@ do
 				socket[EXPIRES] = nil
 				local thread = socket[THREAD]
 				socket[THREAD] = nil
-				coro.transfer(thread, nil, 'timeout')
+				transfer(thread, nil, 'timeout')
 			else
 				--socket are popped in expire-order so no point looking beyond this.
 				break
@@ -1503,26 +1507,35 @@ glue.update(raw, socket)
 
 --coroutine-based scheduler --------------------------------------------------
 
-M.cosafewrap = coro.safewrap
-M.currentthread = coro.running
+M.save_thread_context    = glue.noop --stub
+M.restore_thread_context = glue.noop --stub
 
 local poll_thread
+
+local function restore(...)
+	M.restore_thread_context(currentthread())
+	return ...
+end
+--[[local]] function transfer_to_poll_thread(...)
+	return restore(transfer(poll_thread, ...))
+end
+
 local wait_count = 0
 local waiting = setmetatable({}, {__mode = 'k'}) --{thread -> true}
 
 do
-	local function pass(thread, ...)
-		wait_count = wait_count - 1
-		waiting[thread] = nil
-		return ...
-	end
-	--[[local]] function wait()
-		local thread = coro.running()
-		assert(thread ~= poll_thread, 'trying to I/O from the main thread')
-		wait_count = wait_count + 1
-		waiting[thread] = true
-		return pass(thread, coro.transfer(poll_thread))
-	end
+local function pass(thread, ...)
+	wait_count = wait_count - 1
+	waiting[thread] = nil
+	return ...
+end
+--[[local]] function wait()
+	local thread = currentthread()
+	assert(thread ~= poll_thread, 'trying to I/O from the main thread')
+	wait_count = wait_count + 1
+	waiting[thread] = true
+	return pass(thread, transfer_to_poll_thread())
+end
 end
 
 function M.poll()
@@ -1534,13 +1547,17 @@ end
 
 function M.newthread(handler, name)
 	--wrap handler so that it terminates in current poll_thread.
-	local thread = coro.create(function(...)
+	local thread
+	thread = coro.create(function(...)
+		M.save_thread_context(thread)
 		local ok, err = glue.pcall(handler, ...) --last chance to get stacktrace.
-		if not ok then error(err, 2) end
+		if not ok then
+			error(err, 2)
+		end
 		if name then
 			coro.name(thread, false)
 		end
-		return coro.transfer(poll_thread, ...)
+		return transfer_to_poll_thread(...)
 	end)
 	if name then
 		coro.name(thread, name)
@@ -1548,8 +1565,15 @@ function M.newthread(handler, name)
 	return thread
 end
 
+function M.cosafewrap(f)
+	return coro.safewrap(function(...)
+		M.save_thread_context(currentthread())
+		return f(...)
+	end)
+end
+
 function M.suspend(...)
-	return coro.transfer(poll_thread, ...)
+	return transfer_to_poll_thread(...)
 end
 
 function M.sleep(s)
@@ -1564,7 +1588,7 @@ function M.resume(thread, ...)
 	local real_poll_thread = poll_thread
 	--change poll_thread temporarily so that we get back here
 	--from suspend() or from wait().
-	poll_thread = coro.running()
+	poll_thread = currentthread()
 	return resume_pass(real_poll_thread, M.transfer(thread, ...))
 end
 
@@ -1574,8 +1598,10 @@ end
 
 function M.transfer(thread, ...)
 	assert(not waiting[thread], 'attempt to resume a thread that is waiting on I/O')
-	return coro.transfer(thread, ...)
+	return transfer(thread, ...)
 end
+
+M.currentthread = currentthread
 
 local stop = false
 local running = false
@@ -1584,7 +1610,7 @@ function M.start()
 	if running then
 		return
 	end
-	poll_thread = coro.running()
+	poll_thread = currentthread()
 	repeat
 		running = true
 		local ret, err, errcode = M.poll()
