@@ -510,8 +510,9 @@ do
 	local errbuf = glue.buffer'char[?]'
 
 	local error_classes = {
-		[10013] = 'access_denied',
-		[10048] = 'address_already_in_use',
+		[10013] = 'access_denied', --WSAEACCES
+		[10048] = 'address_already_in_use', --WSAEADDRINUSE
+		[10053] = 'connection_aborted', --WSAECONNABORTED
 	}
 
 	function check(ret, err)
