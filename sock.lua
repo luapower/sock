@@ -305,7 +305,7 @@ typedef VOID            *PVOID;
 typedef char            CHAR;
 typedef CHAR            *LPSTR;
 typedef VOID            *HANDLE;
-typedef struct _GUID {
+typedef struct {
     unsigned long  Data1;
     unsigned short Data2;
     unsigned short Data3;
@@ -487,6 +487,7 @@ void GetAcceptExSockaddrs(
 	sockaddr** RemoteSockaddr,
 	LPINT      RemoteSockaddrLength
 );
+
 ]]
 
 local nbuf = ffi.new'DWORD[1]' --global buffer shared between many calls.
@@ -513,6 +514,7 @@ do
 		[10013] = 'access_denied', --WSAEACCES
 		[10048] = 'address_already_in_use', --WSAEADDRINUSE
 		[10053] = 'connection_aborted', --WSAECONNABORTED
+		[  109] = 'broken_pipe', --ERROR_BROKEN_PIPE, ReadFile
 	}
 
 	function check(ret, err)
@@ -588,6 +590,15 @@ do
 	local WSA_FLAG_OVERLAPPED = 0x01
 	local INVALID_SOCKET = ffi.cast('SOCKET', -1)
 
+	function M._make_async(socket)
+		local iocp = M.iocp()
+		local h = ffi.cast('HANDLE', socket.handle or socket.s)
+		if ffi.C.CreateIoCompletionPort(h, iocp, 0, 0) ~= iocp then
+			return check()
+		end
+		return true
+	end
+
 	--[[local]] function create_socket(class, socktype, family, protocol)
 
 		local st, af, pr = socketargs(socktype, family or 'inet', protocol)
@@ -600,9 +611,9 @@ do
 			return check()
 		end
 
-		local iocp = M.iocp()
-		if ffi.C.CreateIoCompletionPort(ffi.cast('HANDLE', s), iocp, 0, 0) ~= iocp then
-			return check()
+		local ok, err, errno = M._make_async(s)
+		if not ok then
+			return nil, err, errno
 		end
 
 		return wrap_socket(class, s, st, af, pr)
@@ -811,7 +822,7 @@ do
 		if #freed > 0 then
 			local job_index = pop(freed)
 			local job = jobs[job_index]
-			job.socket = socket
+			job.socket = socket --socket or file object from fs.pipe()
 			job.done = done
 			job.expires = expires
 			local o = ffi.cast(LPOVERLAPPED, job.overlapped)
@@ -841,6 +852,7 @@ do
 
 	local WAIT_TIMEOUT = 258
 	local ERROR_OPERATION_ABORTED = 995
+	local ERROR_NOT_FOUND = 1168
 	local INFINITE = 0xffffffff
 
 	local void_ptr_c = ffi.typeof'void*'
@@ -858,7 +870,9 @@ do
 			M.iocp(), nbuf, keybuf, obuf, timeout_ms) ~= 0
 
 		local o = obuf[0]
+
 		if o == nil then
+			assert(not ok)
 			local err = C.WSAGetLastError()
 			if err == WAIT_TIMEOUT then
 				--cancel all timed-out jobs.
@@ -869,15 +883,24 @@ do
 						break
 					end
 					if math.abs(t - job.expires) <= .05 then --arbitrary threshold.
+						expires_heap:pop()
+						job.expires = nil
 						if job.socket then
-							assert(check(ffi.C.CancelIoEx(
-								ffi.cast(void_ptr_c, job.socket.s),
-								job.overlapped.overlapped)))
+							local s = job.socket.handle or job.socket.s --pipe or socket
+							local o = job.overlapped.overlapped
+							local ok = ffi.C.CancelIoEx(ffi.cast(void_ptr_c, s), o) ~= 0
+							if not ok then
+								local err = C.WSAGetLastError()
+								if err == ERROR_NOT_FOUND then --too late, already gone
+									free_overlapped(o)
+									transfer(job.thread, nil, 'timeout')
+								else
+									assert(check(ok, err))
+								end
+							end
 						else --sleep
 							transfer(job.thread)
 						end
-						expires_heap:pop()
-						job.expires = nil
 					else
 						--jobs are popped in expire-order so no point looking beyond this.
 						break
@@ -914,12 +937,12 @@ do
 end
 
 do
-	local WSA_IO_PENDING = 997
+	local WSA_IO_PENDING = 997 --alias to ERROR_IO_PENDING
 
 	local function check_timeout(job, ...)
 		local ret, err = ...
 		if ret == nil and err == 'timeout' then
-			job.socket:close()
+			job.socket:close() --socket or pipe, close it.
 		end
 		return ...
 	end
@@ -1040,6 +1063,19 @@ do
 		assert(job.sa_len_buf[0] <= sa_buf_len) --not truncated
 		return len, job.sa
 	end
+
+	function M._file_async_read(f, read_overlapped, buf, sz, expires)
+		local o, job = overlapped(f, io_done, expires)
+		local ok = read_overlapped(f, o, buf, sz)
+		return check_pending(ok, job)
+	end
+
+	function M._file_async_write(f, write_overlapped, buf, sz, expires)
+		local o, job = overlapped(f, io_done, expires)
+		local ok = write_overlapped(f, o, buf, sz)
+		return check_pending(ok, job)
+	end
+
 end
 
 end --if Windows
