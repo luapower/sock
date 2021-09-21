@@ -611,12 +611,14 @@ do
 			return check()
 		end
 
-		local ok, err, errno = M._make_async(s)
+		local socket = wrap_socket(class, s, st, af, pr)
+
+		local ok, err, errno = M._make_async(socket)
 		if not ok then
 			return nil, err, errno
 		end
 
-		return wrap_socket(class, s, st, af, pr)
+		return socket
 	end
 end
 
