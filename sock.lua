@@ -514,7 +514,7 @@ do
 		[10013] = 'access_denied', --WSAEACCES
 		[10048] = 'address_already_in_use', --WSAEADDRINUSE
 		[10053] = 'connection_aborted', --WSAECONNABORTED
-		[  109] = 'broken_pipe', --ERROR_BROKEN_PIPE, ReadFile
+		[  109] = 'eof', --ERROR_BROKEN_PIPE, ReadFile (masked)
 	}
 
 	function check(ret, err)
@@ -1010,25 +1010,27 @@ do
 		return client_s
 	end
 
-	local wsabuf = ffi.new'WSABUF'
-
 	local pchar_t = ffi.typeof'char*'
+	local wsabuf = ffi.new'WSABUF'
 	local flagsbuf = ffi.new'DWORD[1]'
 
 	local function io_done(job, n)
-		if n == 0 then return nil, 'closed' end
 		return n
 	end
 
-	function socket:send(buf, len, expires)
+	function tcp:_send(buf, len, expires)
+		len = len or #buf
+		assert(len > 0)
 		wsabuf.buf = type(buf) == 'string' and ffi.cast(pchar_t, buf) or buf
-		wsabuf.len = len or #buf
+		wsabuf.len = len
 		local o, job = overlapped(self, io_done, expires)
 		local ok = C.WSASend(self.s, wsabuf, 1, nil, 0, o, nil) == 0
 		return check_pending(ok, job)
 	end
+	udp.send = tcp._send
 
 	function socket:recv(buf, len, expires)
+		assert(len > 0)
 		wsabuf.buf = buf
 		wsabuf.len = len
 		local o, job = overlapped(self, io_done, expires)
@@ -1038,10 +1040,12 @@ do
 	end
 
 	function udp:sendto(host, port, buf, len, expires, flags, addr_flags)
+		len = len or #buf
+		assert(len > 0)
 		local ai, ext_ai, errcode = self:addr(host, port, addr_flags)
 		if not ai then return nil, ext_ai, errcode end
 		wsabuf.buf = type(buf) == 'string' and ffi.cast(pchar_t, buf) or buf
-		wsabuf.len = len or #buf
+		wsabuf.len = len
 		local o, job = overlapped(self, io_done, expires)
 		local ok = C.WSASendTo(self.s, wsabuf, 1, nil, flags or 0, ai.addr, ai.addrlen, o, nil) == 0
 		if not ext_ai then ai:free() end
@@ -1052,6 +1056,7 @@ do
 	local sa_buf_len = ffi.sizeof(sockaddr_ct)
 
 	function udp:recvnext(buf, len, expires, flags)
+		assert(len > 0)
 		wsabuf.buf = buf
 		wsabuf.len = len
 		local o, job = overlapped(self, io_done, expires)
@@ -1159,8 +1164,7 @@ local function make_async(for_writing, f, wait_errno)
 	return function(self, expires, ...)
 		::again::
 		local ret = f(self, ...)
-		if ret == 0 then return nil, 'closed' end
-		if ret > 0 then return ret end
+		if ret >= 0 then return ret end
 		if ffi.errno() == wait_errno then
 			if for_writing then
 				self.send_expires = expires
@@ -1225,26 +1229,32 @@ end
 local MSG_NOSIGNAL = Linux and 0x4000 or nil
 
 local socket_send = make_async(true, function(self, buf, len, flags)
-	return C.send(self.s, buf, len or #buf, flags or MSG_NOSIGNAL)
+	return C.send(self.s, buf, len, flags or MSG_NOSIGNAL)
 end, EWOULDBLOCK)
 
-function socket:send(buf, len, expires, flags)
+function tcp:_send(buf, len, expires, flags)
+	len = len or #buf
+	assert(len > 0)
 	return socket_send(self, expires, buf, len, flags)
 end
+udp.send = tcp._send
 
 local socket_recv = make_async(false, function(self, buf, len, flags)
 	return C.recv(self.s, buf, len, flags or 0)
 end, EWOULDBLOCK)
 
 function socket:recv(buf, len, expires, flags)
+	assert(len > 0)
 	return socket_recv(self, expires, buf, len, flags)
 end
 
 local udp_sendto = make_async(true, function(self, ai, buf, len, flags)
-	return C.sendto(self.s, buf, len or #buf, flags or 0, ai.addr, ai.addrlen)
+	return C.sendto(self.s, buf, len, flags or 0, ai.addr, ai.addrlen)
 end, EWOULDBLOCK)
 
 function udp:sendto(host, port, buf, len, expires, flags, addr_flags)
+	len = len or #buf
+	assert(len > 0)
 	local ai, ext_ai, errcode = self:addr(host, port, addr_flags)
 	if not ai then return nil, ext_ai, errcode end
 	local len, err, errcode = udp_sendto(self, expires, ai, buf, len, flags)
@@ -1264,6 +1274,7 @@ do
 	end, EWOULDBLOCK)
 
 	function udp:recvnext(buf, len, expires, flags)
+		assert(len > 0)
 		local len, err, errcode = udp_recvnext(self, expires, buf, len, flags)
 		if not len then return nil, err, errcode end
 		assert(src_len_buf[0] <= src_buf_len) --not truncated
@@ -1501,29 +1512,38 @@ function tcp:listen(backlog, host, port, addr_flags)
 	return true
 end
 
---tcp send-all & recv-all ----------------------------------------------------
+--tcp repeat I/O -------------------------------------------------------------
 
-local char_ptr_t = ffi.typeof'char*'
+local pchar_t = ffi.typeof'char*'
 
-function tcp:sendall(buf, sz, expires)
-	if type(buf) == 'string' then
-		assert(not sz or sz <= #buf)
-		sz = sz or #buf
-		buf = ffi.cast(char_ptr_t, buf)
-	end
-	while sz > 0 do
-		local len, err, errcode = self:send(buf, sz, expires)
-		if not len then return nil, err, errcode end
+function tcp:send(buf, sz, expires)
+	sz = sz or #buf
+	local sz0 = sz
+	while true do
+		local len, err, errcode = self:_send(buf, sz, expires)
+		if len == sz then
+			break
+		end
+		if not len then --short write
+			return nil, err, errcode, sz0 - sz
+		end
+		assert(len > 0)
+		if type(buf) == 'string' then --only make pointer on the rare second pass.
+			buf = ffi.cast(pchar_t, buf)
+		end
 		buf = buf + len
 		sz  = sz  - len
 	end
 	return true
 end
 
-function tcp:recvall(buf, sz, expires)
+function tcp:recvn(buf, sz, expires)
+	local sz0 = sz
 	while sz > 0 do
 		local len, err, errcode = self:recv(buf, sz, expires)
-		if not len then return nil, err, errcode end
+		if not len or len == 0 then --short read
+			return nil, err, errcode, sz0 - sz
+		end
 		buf = buf + len
 		sz  = sz  - len
 	end

@@ -47,12 +47,12 @@ __sockets__
 `s:setopt(opt, val)`                                             set socket option (`'so_*'` or `'tcp_*'`)
 `s:getopt(opt) -> val`                                           get socket option
 `tcp|udp:connect(host, port, [expires], [af], ...)`              connect to an address
-`tcp|udp:send(s|buf, [maxlen], [expires]) -> len`                send bytes
+`tcp:send(s|buf, [len], [expires]) -> true`                      send bytes to connected address
+`udp:send(s|buf, [len], [expires]) -> len`                       send bytes to connected address
 `tcp|udp:recv(buf, maxlen, [expires]) -> len`                    receive bytes
 `tcp:listen([backlog, ]host, port, [af])`                        put socket in listening mode
 `tcp:accept([expires]) -> ctcp`                                  accept a client connection
-`tcp:sendall(s|buf, [len]) -> true`                              send n bytes
-`tcp:recvall(buf, len, [expires]) -> true`                       receive n bytes
+`tcp:recvn(buf, len, [expires]) -> true`                         receive n bytes
 `udp:sendto(host, port, s|buf, [len], [expires], [af]) -> len`   send a datagram to an address
 `udp:recvnext(buf, maxlen, [expires], [flags]) -> len, sa`       receive the next datagram
 `tcp:shutdown('r'|'w'|'rw', [expires])`                          send FIN
@@ -151,7 +151,12 @@ only those coming from the connected address get through the socket. Also,
 you can call connect() multiple times (use `('*', 0)` to switch back to
 unfiltered mode).
 
-### `tcp|udp:send(s|buf, [maxlen], [expires], [flags]) -> len`
+### `tcp:send(s|buf, [len], [expires], [flags]) -> true`
+
+Send bytes to the connected address.
+Partial writes are signaled with `nil, err, errcode, writelen`.
+
+### `udp:send(s|buf, [len], [expires], [flags]) -> len`
 
 Send bytes to the connected address.
 
@@ -170,13 +175,10 @@ to `1/0` which means "use the maximum allowed".
 Accept a client connection. The connection socket has additional fields:
 `remote_addr`, `remote_port`, `local_addr`, `local_port`.
 
-### `tcp:sendall(s|buf, [len]) -> true`
-
-Repeat send until all bytes are send.
-
-### `tcp:recvall(buf, len, [expires]) -> true`
+### `tcp:recvn(buf, len, [expires]) -> true`
 
 Repeat recv until `len` bytes are received.
+Partial reads are signaled with `nil, err, errcode, readlen`.
 
 ### `udp:sendto(host, port, s|buf, [maxlen], [expires], [flags], [af]) -> len`
 
@@ -195,7 +197,7 @@ Shutdown the socket for receiving, sending or both. Does not block.
 Sends a TCP FIN packet to indicate refusal to send/receive any more data
 on the connection. The FIN packet is only sent after all the current pending
 data is sent (unlike RST which is sent immediately). When a FIN is received
-recv() returns `nil,'closed'`.
+recv() returns 0.
 
 Calling close() without shutdown may send a RST (see the notes on `close()`
 for when that can happen) which may cause any data that is pending either
@@ -206,7 +208,7 @@ Required for lame protocols like HTTP with pipelining: a HTTP server
 that wants to close the connection before honoring all the received
 pipelined requests needs to call `s:shutdown'w'` (which sends a FIN to
 the client) and then continue to receive (and discard) everything until
-a `nil,'closed'` recv comes in (which is a FIN from the client, as a reply
+a recv that returns 0 comes in (which is a FIN from the client, as a reply
 to the FIN from the server) and only then it can close the connection without
 messing up the client.
 

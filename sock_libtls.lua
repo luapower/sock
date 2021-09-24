@@ -100,11 +100,7 @@ local function checkio(self, expires, tls_ret, tls_err)
 		local len, err, errcode = self.tcp:recv(buf, sz, expires)
 		cb_w_buf, cb_w_sz, cb_w_len = t1, t2, t3
 		if not len then
-			if err == 'closed' then
-				len = 0
-			else
-				return false, len, err, errcode
-			end
+			return false, len, err, errcode
 		end
 		cb_r_buf, cb_r_sz, cb_r_len = buf, sz, len
 		return true
@@ -117,23 +113,17 @@ local function checkio(self, expires, tls_ret, tls_err)
 		local len, err, errcode = self.tcp:send(buf, sz, expires)
 		cb_r_buf, cb_r_sz, cb_r_len = t1, t2, t3
 		if not len then
-			if err == 'closed' then
-				len = 0
-			else
-				return false, len, err, errcode
-			end
+			return false, len, err, errcode
 		end
 		cb_w_buf, cb_w_sz, cb_w_len = buf, sz, len
 		return true
-	elseif tls_ret == 0 then
-		return false, nil, 'closed'
 	else
 		return false, tls_ret, tls_err
 	end
 end
 
 function client_stcp:recv(buf, sz, expires)
-	if self._closed then return nil, 'closed' end
+	if self._closed then return 0 end
 	cb_r_buf = nil
 	cb_w_buf = nil
 	while true do
@@ -143,7 +133,7 @@ function client_stcp:recv(buf, sz, expires)
 end
 
 function client_stcp:send(buf, sz, expires)
-	if self._closed then return nil, 'closed' end
+	if self._closed then return nil, 'eof' end
 	cb_r_buf = nil
 	cb_w_buf = nil
 	while true do
