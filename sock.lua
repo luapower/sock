@@ -1020,7 +1020,7 @@ do
 
 	function tcp:_send(buf, len, expires)
 		len = len or #buf
-		assert(len > 0)
+		if len == 0 then return 0 end --mask-out null-writes
 		wsabuf.buf = type(buf) == 'string' and ffi.cast(pchar_t, buf) or buf
 		wsabuf.len = len
 		local o, job = overlapped(self, io_done, expires)
@@ -1041,7 +1041,7 @@ do
 
 	function udp:sendto(host, port, buf, len, expires, flags, addr_flags)
 		len = len or #buf
-		assert(len > 0)
+		if len == 0 then return 0 end --mask-out null-writes
 		local ai, ext_ai, errcode = self:addr(host, port, addr_flags)
 		if not ai then return nil, ext_ai, errcode end
 		wsabuf.buf = type(buf) == 'string' and ffi.cast(pchar_t, buf) or buf
@@ -1234,7 +1234,7 @@ end, EWOULDBLOCK)
 
 function tcp:_send(buf, len, expires, flags)
 	len = len or #buf
-	assert(len > 0)
+	if len == 0 then return 0 end --mask-out null-writes
 	return socket_send(self, expires, buf, len, flags)
 end
 udp.send = tcp._send
@@ -1254,7 +1254,7 @@ end, EWOULDBLOCK)
 
 function udp:sendto(host, port, buf, len, expires, flags, addr_flags)
 	len = len or #buf
-	assert(len > 0)
+	if len == 0 then return 0 end --mask-out null-writes
 	local ai, ext_ai, errcode = self:addr(host, port, addr_flags)
 	if not ai then return nil, ext_ai, errcode end
 	local len, err, errcode = udp_sendto(self, expires, ai, buf, len, flags)
@@ -1519,7 +1519,6 @@ local pchar_t = ffi.typeof'char*'
 function tcp:send(buf, sz, expires)
 	sz = sz or #buf
 	local sz0 = sz
-	if sz == 0 then return true end --mask out null writes
 	while true do
 		local len, err, errcode = self:_send(buf, sz, expires)
 		if len == sz then
