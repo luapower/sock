@@ -155,14 +155,18 @@ unfiltered mode).
 
 Send bytes to the connected address.
 Partial writes are signaled with `nil, err, errcode, writelen`.
+Trying to send zero bytes is allowed but it's a no-op (doesn't go to the OS).
 
 ### `udp:send(s|buf, [len], [expires], [flags]) -> len`
 
 Send bytes to the connected address.
+Empty packets (zero bytes) are allowed.
 
 ### `tcp|udp:recv(buf, maxlen, [expires], [flags]) -> len`
 
 Receive bytes from the connected address.
+With TCP, returning 0 means that the socket was closed on the other side.
+With UDP it just means that an empty packet was received.
 
 ### `tcp:listen([backlog, ]host, port, [af])`
 
