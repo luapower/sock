@@ -1033,7 +1033,7 @@ do
 	end
 
 	function udp:send(buf, len, expires)
-		return socket_send(buf, len or #buf, expires)
+		return socket_send(self, buf, len or #buf, expires)
 	end
 
 	function socket:recv(buf, len, expires)
