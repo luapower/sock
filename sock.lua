@@ -1519,6 +1519,7 @@ local pchar_t = ffi.typeof'char*'
 function tcp:send(buf, sz, expires)
 	sz = sz or #buf
 	local sz0 = sz
+	if sz == 0 then return true end --mask out null writes
 	while true do
 		local len, err, errcode = self:_send(buf, sz, expires)
 		if len == sz then
