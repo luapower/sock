@@ -173,7 +173,7 @@ do
 	else
 		ffi.cdef'const char *gai_strerror(int ecode);'
 		function getaddrinfo_error(err)
-			return nil, str(C.gai_strerror(err)), err
+			return nil, str(C.gai_strerror(err))
 		end
 	end
 
@@ -527,7 +527,7 @@ do
 				FORMAT_MESSAGE_FROM_SYSTEM, nil, err, 0, buf, bufsz, nil)
 			msg = sz > 0 and ffi.string(buf, sz):gsub('[\r\n]+$', '') or 'Error '..err
 		end
-		return nil, msg, err
+		return nil, msg
 	end
 end
 
@@ -613,9 +613,9 @@ do
 
 		local socket = wrap_socket(class, s, st, af, pr)
 
-		local ok, err, errno = M._make_async(socket)
+		local ok, err = M._make_async(socket)
 		if not ok then
-			return nil, err, errno
+			return nil, err
 		end
 
 		return socket
@@ -967,11 +967,11 @@ do
 	function tcp:connect(host, port, expires, addr_flags, ...)
 		if not self._bound then
 			--ConnectEx requires binding first.
-			local ok, err, errcode = self:bind(...)
-			if not ok then return nil, err, errcode end
+			local ok, err = self:bind(...)
+			if not ok then return nil, err end
 		end
-		local ai, ext_ai, errcode = self:addr(host, port, addr_flags)
-		if not ai then return nil, ext_ai, errcode end
+		local ai, ext_ai = self:addr(host, port, addr_flags)
+		if not ai then return nil, ext_ai end
 		local o, job = overlapped(self, return_true, expires)
 		local ok = ConnectEx(self.s, ai.addr, ai.addrlen, nil, 0, nil, o) == 1
 		if not ext_ai then ai:free() end
@@ -979,8 +979,8 @@ do
 	end
 
 	function udp:connect(host, port, expires, addr_flags)
-		local ai, ext_ai, errcode = self:addr(host, port, addr_flags)
-		if not ai then return nil, ext_ai, errcode end
+		local ai, ext_ai = self:addr(host, port, addr_flags)
+		if not ai then return nil, ext_ai end
 		local ok = C.connect(self.s, ai.addr, ai.addrlen) == 0
 		if not ext_ai then ai:free() end
 		return check(ok)
@@ -997,12 +997,12 @@ do
 	local accept_buf = accept_buf_ct()
 	local sa_len = ffi.sizeof(accept_buf) / 2
 	function tcp:accept(expires)
-		local client_s, err, errcode = M.tcp(self._af, self._pr)
-		if not client_s then return nil, err, errcode end
+		local client_s, err = M.tcp(self._af, self._pr)
+		if not client_s then return nil, err end
 		local o, job = overlapped(self, return_true, expires)
 		local ok = AcceptEx(self.s, client_s.s, accept_buf, 0, sa_len, sa_len, nil, o) == 1
-		local ok, err, errcode = check_pending(ok, job)
-		if not ok then return nil, err, errcode end
+		local ok, err = check_pending(ok, job)
+		if not ok then return nil, err end
 		client_s.remote_addr = accept_buf.remote_addr:addr():tostring()
 		client_s.remote_port = accept_buf.remote_addr:port()
 		client_s. local_addr = accept_buf. local_addr:addr():tostring()
@@ -1048,8 +1048,8 @@ do
 
 	function udp:sendto(host, port, buf, len, expires, flags, addr_flags)
 		len = len or #buf
-		local ai, ext_ai, errcode = self:addr(host, port, addr_flags)
-		if not ai then return nil, ext_ai, errcode end
+		local ai, ext_ai = self:addr(host, port, addr_flags)
+		if not ai then return nil, ext_ai end
 		wsabuf.buf = type(buf) == 'string' and ffi.cast(pchar_t, buf) or buf
 		wsabuf.len = len
 		local o, job = overlapped(self, io_done, expires)
@@ -1071,8 +1071,8 @@ do
 		if not job.sa_len_buf then job.sa_len_buf = int_buf_ct() end
 		job.sa_len_buf[0] = sa_buf_len
 		local ok = C.WSARecvFrom(self.s, wsabuf, 1, nil, flagsbuf, job.sa, job.sa_len_buf, o, nil) == 0
-		local len, err, errcode = check_pending(ok, job)
-		if not len then return nil, err, errcode end
+		local len, err = check_pending(ok, job)
+		if not len then return nil, err end
 		assert(job.sa_len_buf[0] <= sa_buf_len) --not truncated
 		return len, job.sa
 	end
@@ -1119,7 +1119,7 @@ ffi.cdef'char *strerror(int errnum);'
 function check(ret)
 	if ret then return ret end
 	local err = ffi.errno()
-	return ret, str(C.strerror(err)), err
+	return ret, str(C.strerror(err))
 end
 
 local SOCK_NONBLOCK = Linux and tonumber(4000, 8)
@@ -1203,11 +1203,11 @@ local connect = make_async(true, function(self, ai)
 end, EINPROGRESS)
 
 function socket:connect(host, port, expires, addr_flags, ...)
-	local ai, err, errcode = self:addr(host, port, addr_flags)
-	if not ai then return nil, err, errcode end
+	local ai, err = self:addr(host, port, addr_flags)
+	if not ai then return nil, err end
 	if not self._bound then
-		local ok, err, errcode = self:bind(...)
-		if not ok then return nil, err, errcode end
+		local ok, err = self:bind(...)
+		if not ok then return nil, err end
 	end
 	return connect(self, expires, ai)
 end
@@ -1223,11 +1223,11 @@ do
 	end, EWOULDBLOCK)
 
 	function tcp:accept(expires)
-		local s, err, errno = tcp_accept(self, expires)
-		if not s then return nil, err, errno end
+		local s, err = tcp_accept(self, expires)
+		if not s then return nil, err end
 		local s = wrap_socket(tcp, s, self._st, self._af, self._pr)
-		local ok, err, errcode = register_socket(s)
-		if not ok then return nil, err, errcode end
+		local ok, err = register_socket(s)
+		if not ok then return nil, err end
 		return s, accept_buf
 	end
 end
@@ -1263,10 +1263,10 @@ end, EWOULDBLOCK)
 
 function udp:sendto(host, port, buf, len, expires, flags, addr_flags)
 	len = len or #buf
-	local ai, ext_ai, errcode = self:addr(host, port, addr_flags)
-	if not ai then return nil, ext_ai, errcode end
-	local len, err, errcode = udp_sendto(self, expires, ai, buf, len, flags)
-	if not len then return nil, err, errcode end
+	local ai, ext_ai = self:addr(host, port, addr_flags)
+	if not ai then return nil, ext_ai end
+	local len, err = udp_sendto(self, expires, ai, buf, len, flags)
+	if not len then return nil, err end
 	if not ext_ai then ai:free() end
 	return len
 end
@@ -1283,8 +1283,8 @@ do
 
 	function udp:recvnext(buf, len, expires, flags)
 		assert(len > 0)
-		local len, err, errcode = udp_recvnext(self, expires, buf, len, flags)
-		if not len then return nil, err, errcode end
+		local len, err = udp_recvnext(self, expires, buf, len, flags)
+		if not len then return nil, err end
 		assert(src_len_buf[0] <= src_buf_len) --not truncated
 		return len, src_buf
 	end
@@ -1485,8 +1485,8 @@ int bind(SOCKET s, const sockaddr*, int namelen);
 
 function socket:bind(host, port, addr_flags)
 	assert(not self._bound)
-	local ai, err, errcode = self:addr(host or '*', port or 0, addr_flags)
-	if not ai then return nil, err, errcode end
+	local ai, err = self:addr(host or '*', port or 0, addr_flags)
+	if not ai then return nil, err end
 	local ok = C.bind(self.s, ai.addr, ai.addrlen) == 0
 	if not err then ai:free() end
 	if not ok then return check() end
@@ -1509,9 +1509,9 @@ function tcp:listen(backlog, host, port, addr_flags)
 		backlog, host, port = 1/0, backlog, host
 	end
 	if not self._bound then
-		local ok, err, errcode = self:bind(host, port, addr_flags)
+		local ok, err = self:bind(host, port, addr_flags)
 		if not ok then
-			return nil, err, errcode
+			return nil, err
 		end
 	end
 	backlog = glue.clamp(backlog or 1/0, 0, 0x7fffffff)
@@ -1528,12 +1528,12 @@ function tcp:send(buf, sz, expires)
 	sz = sz or #buf
 	local sz0 = sz
 	while true do
-		local len, err, errcode = self:_send(buf, sz, expires)
+		local len, err = self:_send(buf, sz, expires)
 		if len == sz then
 			break
 		end
 		if not len then --short write
-			return nil, err, errcode, sz0 - sz
+			return nil, err, sz0 - sz
 		end
 		assert(len > 0)
 		if type(buf) == 'string' then --only make pointer on the rare second pass.
@@ -1548,9 +1548,9 @@ end
 function tcp:recvn(buf, sz, expires)
 	local sz0 = sz
 	while sz > 0 do
-		local len, err, errcode = self:recv(buf, sz, expires)
+		local len, err = self:recv(buf, sz, expires)
 		if not len or len == 0 then --short read
-			return nil, err, errcode, sz0 - sz
+			return nil, err, sz0 - sz
 		end
 		buf = buf + len
 		sz  = sz  - len
@@ -1680,13 +1680,13 @@ function M.start()
 	poll_thread = currentthread()
 	repeat
 		running = true
-		local ret, err, errcode = M.poll()
+		local ret, err = M.poll()
 		if not ret then
 			M.stop()
 			if err ~= 'empty' then
 				running = false
 				stop = false
-				return ret, err, errcode
+				return ret, err
 			end
 		end
 	until stop

@@ -75,8 +75,9 @@ __multi-threading__
 `sock.epoll_fd([epfd]) -> epfd`                                  get/set epoll fd (Linux)
 ---------------------------------------------------------------- ----------------------------
 
-All function return `nil, err, errcode` on error. Some error messages
-are normalized across platforms, like 'access_denied' and 'address_already_in_use'
+All function return `nil, err` on error (but raise on user error
+or unrecoverable OS failure). Some error messages are normalized
+across platforms, like 'access_denied' and 'address_already_in_use'
 so they can be used as conditionals.
 
 I/O functions only work inside threads created with `sock.newthread()`.
@@ -154,7 +155,7 @@ unfiltered mode).
 ### `tcp:send(s|buf, [len], [expires], [flags]) -> true`
 
 Send bytes to the connected address.
-Partial writes are signaled with `nil, err, errcode, writelen`.
+Partial writes are signaled with `nil, err, writelen`.
 Trying to send zero bytes is allowed but it's a no-op (doesn't go to the OS).
 
 ### `udp:send(s|buf, [len], [expires], [flags]) -> len`
@@ -182,7 +183,7 @@ Accept a client connection. The connection socket has additional fields:
 ### `tcp:recvn(buf, len, [expires]) -> true`
 
 Repeat recv until `len` bytes are received.
-Partial reads are signaled with `nil, err, errcode, readlen`.
+Partial reads are signaled with `nil, err, readlen`.
 
 ### `udp:sendto(host, port, s|buf, [maxlen], [expires], [flags], [af]) -> len`
 
