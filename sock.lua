@@ -590,13 +590,17 @@ do
 	local WSA_FLAG_OVERLAPPED = 0x01
 	local INVALID_SOCKET = ffi.cast('SOCKET', -1)
 
-	function M._make_async(socket)
+	function M._register(socket)
 		local iocp = M.iocp()
-		local h = ffi.cast('HANDLE', socket.handle or socket.s)
+		local h = ffi.cast('HANDLE', socket.s)
 		if ffi.C.CreateIoCompletionPort(h, iocp, 0, 0) ~= iocp then
 			return check()
 		end
 		return true
+	end
+
+	function M._unregister()
+		return true --no need.
 	end
 
 	--[[local]] function create_socket(class, socktype, family, protocol)
@@ -613,7 +617,7 @@ do
 
 		local socket = wrap_socket(class, s, st, af, pr)
 
-		local ok, err = M._make_async(socket)
+		local ok, err = M._register(socket)
 		if not ok then
 			return nil, err
 		end
@@ -888,7 +892,7 @@ do
 						expires_heap:pop()
 						job.expires = nil
 						if job.socket then
-							local s = job.socket.handle or job.socket.s --pipe or socket
+							local s = job.socket.s --pipe or socket
 							local o = job.overlapped.overlapped
 							local ok = ffi.C.CancelIoEx(ffi.cast(void_ptr_c, s), o) ~= 0
 							if not ok then
@@ -1095,8 +1099,6 @@ end --if Windows
 
 --POSIX sockets --------------------------------------------------------------
 
-local register_socket, unregister_socket --fw. decl.
-
 if Linux or OSX then
 
 ffi.cdef[[
@@ -1112,6 +1114,9 @@ int recv(int s, char *buf, int len, int flags);
 int recvfrom(int s, char *buf, int len, int flags, struct sockaddr *from, int *fromlen);
 int send(int s, const char *buf, int len, int flags);
 int sendto(int s, const char *buf, int len, int flags, const struct sockaddr *to, int tolen);
+// for async pipes
+ssize_t read(int fd, void *buf, size_t count);
+ssize_t write(int fd, const void *buf, size_t count);
 ]]
 
 --error handling.
@@ -1135,7 +1140,7 @@ end
 
 function socket:close()
 	if not self.s then return true end
-	unregister_socket(self)
+	M._unregister(self)
 	local s = self.s; self.s = nil --unsafe to close twice no matter the error.
 	return check(C.close(s) == 0)
 end
@@ -1144,7 +1149,8 @@ function socket:closed()
 	return not self.s
 end
 
-local EWOULDBLOCK = 11 --alias of EAGAIN in Linux
+local EAGAIN      = 11
+local EWOULDBLOCK = 11
 local EINPROGRESS = 115
 
 local recv_expires_heap = heap.valueheap{
@@ -1166,10 +1172,10 @@ function M.sleep_until(t)
 	wait()
 end
 
-local function make_async(for_writing, f, wait_errno)
+local function make_async(for_writing, func, wait_errno)
 	return function(self, expires, ...)
 		::again::
-		local ret = f(self, ...)
+		local ret = func(self, ...)
 		if ret >= 0 then return ret end
 		if ffi.errno() == wait_errno then
 			if for_writing then
@@ -1226,7 +1232,7 @@ do
 		local s, err = tcp_accept(self, expires)
 		if not s then return nil, err end
 		local s = wrap_socket(tcp, s, self._st, self._af, self._pr)
-		local ok, err = register_socket(s)
+		local ok, err = M._register(s)
 		if not ok then return nil, err end
 		return s, accept_buf
 	end
@@ -1290,6 +1296,21 @@ do
 	end
 end
 
+local file_write = make_async(true, function(self, buf, len)
+	return tonumber(C.write(self.fd, buf, len))
+end, EAGAIN)
+
+local file_read = make_async(false, function(self, buf, len)
+	return tonumber(C.read(self.fd, buf, len))
+end, EAGAIN)
+
+function M._file_async_write(f, buf, len, expires)
+	return file_write(f, expires, buf, len)
+end
+function M._file_async_read(f, buf, len, expires)
+	return file_read(f, expires, buf, len)
+end
+
 --epoll ----------------------------------------------------------------------
 
 if Linux then
@@ -1336,15 +1357,25 @@ do
 end
 
 do
-	local sockets = {} --{s1, ...}
+	local epoll_event = ffi.typeof'struct epoll_event'
+
+	local sockets = {} --{socket1, ...}
+	local events = {} --{event1, ...}
 	local free_indices = {} --{i1, ...}
 
-	--[[local]] function register_socket(s)
-		local i = pop(free_indices) or #sockets + 1
+	function M._register(s)
+		local i = pop(free_indices)
+		local e
+		if i then
+			e = events[i]
+			ffi.fill(e, ffi.sizeof(e))
+		else
+			i = #sockets + 1
+			e = epoll_event()
+			events[i] = e
+		end
 		s._i = i
-		s._e = e
 		sockets[i] = s
-		local e = ffi.new'struct epoll_event'
 		e.data.u32 = i
 		e.events = EPOLLIN + EPOLLOUT + EPOLLERR + EPOLLET
 		return check(C.epoll_ctl(M.epoll_fd(), EPOLL_CTL_ADD, s.s, e) == 0)
@@ -1352,10 +1383,10 @@ do
 
 	local ENOENT = 2
 
-	--[[local]] function unregister_socket(s)
+	function M._unregister(s)
 		local i = s._i
 		if not i then return true end --closing before bind() was called.
-		local ok = C.epoll_ctl(M.epoll_fd(), EPOLL_CTL_DEL, s.s, s._e) == 0
+		local ok = C.epoll_ctl(M.epoll_fd(), EPOLL_CTL_DEL, s.s, events[i]) == 0
 		--epoll removed the fd if connection was closed so ENOENT is normal.
 		if not ok and ffi.errno() ~= ENOENT then
 			return check()
@@ -1492,10 +1523,7 @@ function socket:bind(host, port, addr_flags)
 	if not ok then return check() end
 	self._bound = true
 	--epoll_ctl() must be called after bind() for some reason.
-	if register_socket then
-		return register_socket(self)
-	end
-	return true
+	return M._register(self)
 end
 
 --listen() -------------------------------------------------------------------
