@@ -626,166 +626,6 @@ do
 	end
 end
 
-do
-	local OPT = { --Windows 7 options only
-		so_acceptconn         = 0x0002, -- socket has had listen()
-		so_broadcast          = 0x0020, -- permit sending of broadcast msgs
-		so_bsp_state          = 0x1009, -- get socket 5-tuple state
-		so_conditional_accept = 0x3002, -- enable true conditional accept (see msdn)
-		so_connect_time       = 0x700C, -- number of seconds a socket has been connected
-		so_dontlinger         = bit.bnot(0x0080),
-		so_dontroute          = 0x0010, -- just use interface addresses
-		so_error              = 0x1007, -- get error status and clear
-		so_exclusiveaddruse   = bit.bnot(0x0004), -- disallow local address reuse
-		so_keepalive          = 0x0008, -- keep connections alive
-		so_linger             = 0x0080, -- linger on close if data present
-		so_max_msg_size       = 0x2003, -- maximum message size for UDP
-		so_maxdg              = 0x7009,
-		so_maxpathdg          = 0x700a,
-		so_oobinline          = 0x0100, -- leave received oob data in line
-		so_pause_accept       = 0x3003, -- pause accepting new connections
-		so_port_scalability   = 0x3006, -- enable port scalability
-		so_protocol_info      = 0x2005, -- wsaprotocol_infow structure
-		so_randomize_port     = 0x3005, -- randomize assignment of wildcard ports
-		so_rcvbuf             = 0x1002, -- receive buffer size
-		so_rcvlowat           = 0x1004, -- receive low-water mark
-		so_reuseaddr          = 0x0004, -- allow local address reuse
-		so_sndbuf             = 0x1001, -- send buffer size
-		so_sndlowat           = 0x1003, -- send low-water mark
-		so_type               = 0x1008, -- get socket type
-		so_update_accept_context  = 0x700b,
-		so_update_connect_context = 0x7010,
-		so_useloopback        = 0x0040, -- bypass hardware when possible
-		tcp_bsdurgent         = 0x7000,
-		tcp_expedited_1122  	 = 0x0002,
-		tcp_maxrt           	 =      5,
-		tcp_nodelay           = 0x0001,
-		tcp_timestamps      	 =     10,
-	}
-
-	local function get_bool   (buf) return buf.u == 1 end
-	local function get_int    (buf) return buf.i end
-	local function get_uint   (buf) return buf.u end
-	local function get_uint16 (buf) return buf.u16 end
-
-	local buf = ffi.new[[
-		union {
-			char     c[4];
-			uint32_t u;
-			uint16_t u16;
-			int32_t  i;
-		}
-	]]
-
-	local function set_bool(v) --BOOL aka DWORD
-		buf.u = v
-		return buf.c, 4
-	end
-
-	local function set_int(v)
-		buf.i = v
-		return buf.c, 4
-	end
-
-	local function set_uint(v)
-		buf.u = v
-		return buf.c, 4
-	end
-
-	local function set_uint16(v)
-		buf.u16 = v
-		return buf.c, 2
-	end
-
-	local function nyi() error'NYI' end
-	local get_protocol_info = nyi
-	local set_linger = nyi
-	local get_csaddr_info = nyi
-
-	local get_opt = {
-		so_acceptconn         = get_bool,
-		so_broadcast          = get_bool,
-		so_bsp_state          = get_csaddr_info,
-		so_conditional_accept = get_bool,
-		so_connect_time       = get_uint,
-		so_dontlinger         = get_bool,
-		so_dontroute          = get_bool,
-		so_error              = get_uint,
-		so_exclusiveaddruse   = get_bool,
-		so_keepalive          = get_bool,
-		so_linger             = get_linger,
-		so_max_msg_size       = get_uint,
-		so_maxdg              = get_uint,
-		so_maxpathdg          = get_uint,
-		so_oobinline          = get_bool,
-		so_pause_accept       = get_bool,
-		so_port_scalability   = get_bool,
-		so_protocol_info      = get_protocol_info,
-		so_randomize_port     = get_uint16,
-		so_rcvbuf             = get_uint,
-		so_rcvlowat           = get_uint,
-		so_reuseaddr          = get_bool,
-		so_sndbuf             = get_uint,
-		so_sndlowat           = get_uint,
-		so_type               = get_uint,
-		tcp_bsdurgent         = get_bool,
-		tcp_expedited_1122  	 = get_bool,
-		tcp_maxrt           	 = get_uint,
-		tcp_nodelay           = get_bool,
-		tcp_timestamps      	 = get_bool,
-	}
-
-	local set_opt = {
-		so_broadcast          = set_bool,
-		so_conditional_accept = set_bool,
-		so_dontlinger         = set_bool,
-		so_dontroute          = set_bool,
-		so_exclusiveaddruse   = set_bool,
-		so_keepalive          = set_bool,
-		so_linger             = set_linger,
-		so_max_msg_size       = set_uint,
-		so_oobinline          = set_bool,
-		so_pause_accept       = set_bool,
-		so_port_scalability   = set_bool,
-		so_randomize_port     = set_uint16,
-		so_rcvbuf             = set_uint,
-		so_rcvlowat           = set_uint,
-		so_reuseaddr          = set_bool,
-		so_sndbuf             = set_uint,
-		so_sndlowat           = set_uint,
-		so_update_accept_context  = set_bool,
-		so_update_connect_context = set_bool,
-		tcp_bsdurgent         = set_bool,
-		tcp_expedited_1122  	 = set_bool,
-		tcp_maxrt           	 = set_uint,
-		tcp_nodelay           = set_bool,
-		tcp_timestamps      	 = set_bool,
-	}
-
-	local function parse_opt(k)
-		local opt = assert(OPT[k], 'invalid socket option')
-		local level = k:find('tcp_', 1, true) and 6 or 0xffff
-		return opt, level
-	end
-
-	function socket:getopt(k)
-		local opt, level = parse_opt(k)
-		local get = assert(get_opt[k], 'write-only socket option')
-		local nbuf = ffi.new('int[1]', 4)
-		local ok, err = check(C.getsockopt(self.s, level, opt, buf.c, nbuf))
-		if not ok then return nil, err end
-		return get(buf, sz)
-	end
-
-	function socket:setopt(k, v)
-		local opt, level = parse_opt(k)
-		local set = assert(set_opt[k], 'read-only socket option')
-		local buf, sz = set(v)
-		return check(C.setsockopt(self.s, level, opt, buf, sz))
-	end
-
-end
-
 function socket:close()
 	if not self.s then return true end
 	local s = self.s; self.s = nil --unsafe to close twice no matter the error.
@@ -1109,7 +949,8 @@ int accept4(int s, struct sockaddr *addr, int *addrlen, int flags);
 int close(int s);
 int connect(int s, const struct sockaddr *name, int namelen);
 int ioctl(int s, long cmd, unsigned long *argp, ...);
-int setsockopt(int sockfd, int level, int optname, const void *optval, unsigned int optlen);
+int getsockopt(int sockfd, int level, int optname, char *optval, unsigned int *optlen);
+int setsockopt(int sockfd, int level, int optname, const char *optval, unsigned int optlen);
 int recv(int s, char *buf, int len, int flags);
 int recvfrom(int s, char *buf, int len, int flags, struct sockaddr *from, int *fromlen);
 int send(int s, const char *buf, int len, int flags);
@@ -1209,13 +1050,21 @@ local connect = make_async(true, function(self, ai)
 end, EINPROGRESS)
 
 function socket:connect(host, port, expires, addr_flags, ...)
-	local ai, err = self:addr(host, port, addr_flags)
-	if not ai then return nil, err end
+	local ai, ext_ai = self:addr(host, port, addr_flags)
+	if not ai then return nil, ext_ai end
 	if not self._bound then
 		local ok, err = self:bind(...)
-		if not ok then return nil, err end
+		if not ok then
+			if not ext_ai then ai:free() end
+			return nil, err
+		end
 	end
-	return connect(self, expires, ai)
+	local len, err = connect(self, expires, ai)
+	if not len then
+		if not ext_ai then ai:free() end
+		return nil, err
+	end
+	return true
 end
 
 do
@@ -1333,10 +1182,12 @@ int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event);
 int epoll_wait(int epfd, struct epoll_event *events, int maxevents, int timeout);
 ]]
 
-local EPOLLIN  = 0x0001
-local EPOLLOUT = 0x0004
-local EPOLLERR = 0x0008
-local EPOLLET  = 2^31
+local EPOLLIN    = 0x0001
+local EPOLLOUT   = 0x0004
+local EPOLLERR   = 0x0008
+local EPOLLHUP   = 0x0010
+local EPOLLRDHUP = 0x2000
+local EPOLLET    = 2^31
 
 local EPOLL_CTL_ADD = 1
 local EPOLL_CTL_DEL = 2
@@ -1357,27 +1208,16 @@ do
 end
 
 do
-	local epoll_event = ffi.typeof'struct epoll_event'
-
 	local sockets = {} --{socket1, ...}
-	local events = {} --{event1, ...}
 	local free_indices = {} --{i1, ...}
 
+	local e = ffi.new'struct epoll_event'
 	function M._register(s)
-		local i = pop(free_indices)
-		local e
-		if i then
-			e = events[i]
-			ffi.fill(e, ffi.sizeof(e))
-		else
-			i = #sockets + 1
-			e = epoll_event()
-			events[i] = e
-		end
+		local i = pop(free_indices) or #sockets + 1
 		s._i = i
 		sockets[i] = s
 		e.data.u32 = i
-		e.events = EPOLLIN + EPOLLOUT + EPOLLERR + EPOLLET
+		e.events = EPOLLIN + EPOLLOUT + EPOLLET
 		return check(C.epoll_ctl(M.epoll_fd(), EPOLL_CTL_ADD, s.s, e) == 0)
 	end
 
@@ -1386,7 +1226,7 @@ do
 	function M._unregister(s)
 		local i = s._i
 		if not i then return true end --closing before bind() was called.
-		local ok = C.epoll_ctl(M.epoll_fd(), EPOLL_CTL_DEL, s.s, events[i]) == 0
+		local ok = C.epoll_ctl(M.epoll_fd(), EPOLL_CTL_DEL, s.s, nil) == 0
 		--epoll removed the fd if connection was closed so ENOENT is normal.
 		if not ok and ffi.errno() ~= ENOENT then
 			return check()
@@ -1396,28 +1236,31 @@ do
 		return true
 	end
 
-	local function resume(socket, e, event, for_writing)
-		if bit.band(e, event) ~= 0 then --read
-			local thread
-			if for_writing then
-				thread = socket.send_thread
-			else
-				thread = socket.recv_thread
+	local function wake(socket, for_writing, has_err)
+		local thread
+		if for_writing then
+			thread = socket.send_thread
+		else
+			thread = socket.recv_thread
+		end
+		if not thread then return end --misfire.
+		if for_writing then
+			if socket.send_expires then
+				assert(send_expires_heap:remove(socket))
+				socket.send_expires = nil
 			end
-			if not thread then return end --misfire.
-			if for_writing then
-				if socket.send_expires then
-					assert(send_expires_heap:remove(socket))
-					socket.send_expires = nil
-				end
-				socket.send_thread = nil
-			else
-				if socket.recv_expires then
-					assert(recv_expires_heap:remove(socket))
-					socket.recv_expires = nil
-				end
-				socket.recv_thread = nil
+			socket.send_thread = nil
+		else
+			if socket.recv_expires then
+				assert(recv_expires_heap:remove(socket))
+				socket.recv_expires = nil
 			end
+			socket.recv_thread = nil
+		end
+		if has_err then
+			local err = socket:getopt'so_error'
+			transfer(thread, nil, err or 'socket error')
+		else
 			transfer(thread, true)
 		end
 	end
@@ -1441,8 +1284,15 @@ do
 		end
 	end
 
+	--NOTE: If you think of making maxevents > 1 for a modest perf gain,
+	--note that epoll_wait() will coalesce multiple events affecting the same
+	--fd in a single epoll_event item, and it returns the number of events,
+	--not the number of epoll_event items that were filled, contrary to what
+	--the epoll man page says, so it's not trivial to parse the result.
 	local maxevents = 1
 	local events = ffi.new('struct epoll_event[?]', maxevents)
+	local RECV_MASK = EPOLLIN  + EPOLLERR + EPOLLHUP + EPOLLRDHUP
+	local SEND_MASK = EPOLLOUT + EPOLLERR + EPOLLHUP + EPOLLRDHUP
 
 	--[[local]] function poll()
 
@@ -1458,12 +1308,15 @@ do
 
 		local n = C.epoll_wait(M.epoll_fd(), events, maxevents, timeout_ms)
 		if n > 0 then
-			for i = 0, n-1 do
-				local socket = sockets[events[i].data.u32]
-				local e = events[i].events
-				resume(socket, e, EPOLLIN , false)
-				resume(socket, e, EPOLLOUT, true)
-			end
+			assert(n == 1)
+			local e = events[0].events
+			local si = events[0].data.u32
+			local socket = sockets[si]
+			--if EPOLLHUP/RDHUP/ERR arrives (and it'll arrive alone because maxevents == 1),
+			--we need to wake up all waiting threads because EPOLLIN/OUT might never follow!
+			local has_err = bit.band(e, EPOLLERR) ~= 0
+			if bit.band(e, RECV_MASK) ~= 0 then wake(socket, false, has_err) end
+			if bit.band(e, SEND_MASK) ~= 0 then wake(socket, true , has_err) end
 			return true
 		elseif n == 0 then
 			--handle timed-out ops.
@@ -1516,14 +1369,18 @@ int bind(SOCKET s, const sockaddr*, int namelen);
 
 function socket:bind(host, port, addr_flags)
 	assert(not self._bound)
-	local ai, err = self:addr(host or '*', port or 0, addr_flags)
-	if not ai then return nil, err end
-	local ok = C.bind(self.s, ai.addr, ai.addrlen) == 0
-	if not err then ai:free() end
-	if not ok then return check() end
+	local ai, ext_ai = self:addr(host or '*', port or 0, addr_flags)
+	if not ai then return nil, ext_ai end
+	local ok, err = check(C.bind(self.s, ai.addr, ai.addrlen) == 0)
+	if not ext_ai then ai:free() end
+	if not ok then return false, err end
 	self._bound = true
-	--epoll_ctl() must be called after bind() for some reason.
-	return M._register(self)
+	if Linux then
+		--epoll_ctl() must be called after bind() for some reason.
+		return M._register(self)
+	else
+		return true
+	end
 end
 
 --listen() -------------------------------------------------------------------
@@ -1547,6 +1404,268 @@ function tcp:listen(backlog, host, port, addr_flags)
 	if not ok then return check() end
 	return true
 end
+
+do --getopt() & setopt() -----------------------------------------------------
+
+local buf = ffi.new[[
+	union {
+		char     c[4];
+		uint32_t u;
+		uint16_t u16;
+		int32_t  i;
+	}
+]]
+
+local function get_bool   (buf) return buf.u == 1 end
+local function get_int    (buf) return buf.i end
+local function get_uint   (buf) return buf.u end
+local function get_uint16 (buf) return buf.u16 end
+
+local function get_str(buf, sz)
+	return str(C.strerror(buf.i))
+end
+
+local function set_bool(v) --BOOL aka DWORD
+	buf.u = v
+	return buf.c, 4
+end
+
+local function set_int(v)
+	buf.i = v
+	return buf.c, 4
+end
+
+local function set_uint(v)
+	buf.u = v
+	return buf.c, 4
+end
+
+local function set_uint16(v)
+	buf.u16 = v
+	return buf.c, 2
+end
+
+local function nyi() error'NYI' end
+
+local get_protocol_info = nyi
+local set_linger = nyi
+local get_csaddr_info = nyi
+
+local OPT, get_opt, set_opt
+
+if Windows then
+
+OPT = { --Windows 7 options only
+	so_acceptconn         = 0x0002, -- socket has had listen()
+	so_broadcast          = 0x0020, -- permit sending of broadcast msgs
+	so_bsp_state          = 0x1009, -- get socket 5-tuple state
+	so_conditional_accept = 0x3002, -- enable true conditional accept (see msdn)
+	so_connect_time       = 0x700C, -- number of seconds a socket has been connected
+	so_dontlinger         = bit.bnot(0x0080),
+	so_dontroute          = 0x0010, -- just use interface addresses
+	so_error              = 0x1007, -- get error status and clear
+	so_exclusiveaddruse   = bit.bnot(0x0004), -- disallow local address reuse
+	so_keepalive          = 0x0008, -- keep connections alive
+	so_linger             = 0x0080, -- linger on close if data present
+	so_max_msg_size       = 0x2003, -- maximum message size for UDP
+	so_maxdg              = 0x7009,
+	so_maxpathdg          = 0x700a,
+	so_oobinline          = 0x0100, -- leave received oob data in line
+	so_pause_accept       = 0x3003, -- pause accepting new connections
+	so_port_scalability   = 0x3006, -- enable port scalability
+	so_protocol_info      = 0x2005, -- wsaprotocol_infow structure
+	so_randomize_port     = 0x3005, -- randomize assignment of wildcard ports
+	so_rcvbuf             = 0x1002, -- receive buffer size
+	so_rcvlowat           = 0x1004, -- receive low-water mark
+	so_reuseaddr          = 0x0004, -- allow local address reuse
+	so_sndbuf             = 0x1001, -- send buffer size
+	so_sndlowat           = 0x1003, -- send low-water mark
+	so_type               = 0x1008, -- get socket type
+	so_update_accept_context  = 0x700b,
+	so_update_connect_context = 0x7010,
+	so_useloopback        = 0x0040, -- bypass hardware when possible
+	tcp_bsdurgent         = 0x7000,
+	tcp_expedited_1122  	 = 0x0002,
+	tcp_maxrt           	 =      5,
+	tcp_nodelay           = 0x0001,
+	tcp_timestamps      	 =     10,
+}
+
+get_opt = {
+	so_acceptconn         = get_bool,
+	so_broadcast          = get_bool,
+	so_bsp_state          = get_csaddr_info,
+	so_conditional_accept = get_bool,
+	so_connect_time       = get_uint,
+	so_dontlinger         = get_bool,
+	so_dontroute          = get_bool,
+	so_error              = get_uint,
+	so_exclusiveaddruse   = get_bool,
+	so_keepalive          = get_bool,
+	so_linger             = get_linger,
+	so_max_msg_size       = get_uint,
+	so_maxdg              = get_uint,
+	so_maxpathdg          = get_uint,
+	so_oobinline          = get_bool,
+	so_pause_accept       = get_bool,
+	so_port_scalability   = get_bool,
+	so_protocol_info      = get_protocol_info,
+	so_randomize_port     = get_uint16,
+	so_rcvbuf             = get_uint,
+	so_rcvlowat           = get_uint,
+	so_reuseaddr          = get_bool,
+	so_sndbuf             = get_uint,
+	so_sndlowat           = get_uint,
+	so_type               = get_uint,
+	tcp_bsdurgent         = get_bool,
+	tcp_expedited_1122  	 = get_bool,
+	tcp_maxrt           	 = get_uint,
+	tcp_nodelay           = get_bool,
+	tcp_timestamps      	 = get_bool,
+}
+
+set_opt = {
+	so_broadcast          = set_bool,
+	so_conditional_accept = set_bool,
+	so_dontlinger         = set_bool,
+	so_dontroute          = set_bool,
+	so_exclusiveaddruse   = set_bool,
+	so_keepalive          = set_bool,
+	so_linger             = set_linger,
+	so_max_msg_size       = set_uint,
+	so_oobinline          = set_bool,
+	so_pause_accept       = set_bool,
+	so_port_scalability   = set_bool,
+	so_randomize_port     = set_uint16,
+	so_rcvbuf             = set_uint,
+	so_rcvlowat           = set_uint,
+	so_reuseaddr          = set_bool,
+	so_sndbuf             = set_uint,
+	so_sndlowat           = set_uint,
+	so_update_accept_context  = set_bool,
+	so_update_connect_context = set_bool,
+	tcp_bsdurgent         = set_bool,
+	tcp_expedited_1122  	 = set_bool,
+	tcp_maxrt           	 = set_uint,
+	tcp_nodelay           = set_bool,
+	tcp_timestamps      	 = set_bool,
+}
+
+elseif Linux then
+
+OPT = {
+	so_debug             = 1,
+	so_reuseaddr         = 2,
+	so_type              = 3,
+	so_error             = 4,
+	so_dontroute         = 5,
+	so_broadcast         = 6,
+	so_sndbuf            = 7,
+	so_rcvbuf            = 8,
+	so_sndbufforce       = 32,
+	so_rcvbufforce       = 33,
+	so_keepalive         = 9,
+	so_oobinline         = 10,
+	so_no_check          = 11,
+	so_priority          = 12,
+	so_linger            = 13,
+	so_bsdcompat         = 14,
+	so_reuseport         = 15,
+	so_passcred          = 16,
+	so_peercred          = 17,
+	so_rcvlowat          = 18,
+	so_sndlowat          = 19,
+	so_rcvtimeo          = 20,
+	so_sndtimeo          = 21,
+	so_security_authentication = 22,
+	so_security_encryption_transport = 23,
+	so_security_encryption_network = 24,
+	so_bindtodevice      = 25,
+	so_attach_filter     = 26,
+	so_detach_filter     = 27,
+	so_get_filter        = 26, --so_attach_filter
+	so_peername          = 28,
+	so_timestamp         = 29,
+	scm_timestamp        = 29, --so_timestamp
+	so_acceptconn        = 30,
+	so_peersec           = 31,
+	so_passsec           = 34,
+	so_timestampns       = 35,
+	scm_timestampns      = 35, --so_timestampns
+	so_mark              = 36,
+	so_timestamping      = 37,
+	scm_timestamping     = 37, --so_timestamping
+	so_protocol          = 38,
+	so_domain            = 39,
+	so_rxq_ovfl          = 40,
+	so_wifi_status       = 41,
+	scm_wifi_status      = 41, --so_wifi_status
+	so_peek_off          = 42,
+	so_nofcs             = 43,
+	so_lock_filter       = 44,
+	so_select_err_queue  = 45,
+	so_busy_poll         = 46,
+	so_max_pacing_rate   = 47,
+	so_bpf_extensions    = 48,
+	so_incoming_cpu      = 49,
+	so_attach_bpf        = 50,
+	so_detach_bpf        = 27, --so_detach_filter
+	so_attach_reuseport_cbpf = 51,
+	so_attach_reuseport_ebpf = 52,
+	so_cnx_advice        = 53,
+	scm_timestamping_opt_stats = 54,
+	so_meminfo           = 55,
+	so_incoming_napi_id  = 56,
+	so_cookie            = 57,
+	scm_timestamping_pktinfo = 58,
+	so_peergroups        = 59,
+	so_zerocopy          = 60,
+}
+
+get_opt = {
+	so_error = get_str,
+}
+
+set_opt = {
+	--TODO
+}
+
+elseif OSX then --TODO
+
+OPT = {}
+get_opt = {}
+set_opt = {}
+
+end
+
+local function parse_opt(k)
+	local opt = assert(OPT[k], 'invalid socket option')
+	local level =
+		(k:find('tcp_', 1, true) and 6) --TCP protocol number
+		or (
+			(Windows and 0xffff)
+			or (Linux and 1) --SOL_SOCKET
+		)
+	return opt, level
+end
+
+function socket:getopt(k)
+	local opt, level = parse_opt(k)
+	local get = assert(get_opt[k], 'write-only socket option')
+	local nbuf = ffi.new('int[1]', 4)
+	local ok, err = check(C.getsockopt(self.s, level, opt, buf.c, nbuf))
+	if not ok then return nil, err end
+	return get(buf, sz)
+end
+
+function socket:setopt(k, v)
+	local opt, level = parse_opt(k)
+	local set = assert(set_opt[k], 'read-only socket option')
+	local buf, sz = set(v)
+	return check(C.setsockopt(self.s, level, opt, buf, sz))
+end
+
+end --do
 
 --tcp repeat I/O -------------------------------------------------------------
 
