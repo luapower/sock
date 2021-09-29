@@ -28,10 +28,10 @@ assert(Windows or Linux or OSX, 'unsupported platform')
 local C = Windows and ffi.load'ws2_32' or ffi.C
 local M = {C = C, clock = clock}
 
-local socket = {issocket = true} --common socket methods
-local tcp = {istcpsocket = true} --methods of tcp sockets
-local udp = {isudpsocket = true} --methods of udp sockets
-local raw = {israwsocket = true} --methods of raw sockets
+local socket = {debug_prefix = 'S'} --common socket methods
+local tcp = {type = 'tcp_socket'}
+local udp = {type = 'udp_socket'}
+local raw = {type = 'raw_socket'}
 
 --forward declarations
 local check, poll, wait, create_socket, wrap_socket
