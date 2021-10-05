@@ -1759,7 +1759,7 @@ function M.poll()
 	return poll()
 end
 
-function M.newthread(handler, name)
+function M.newthread(handler)
 	--wrap handler so that it terminates in current poll_thread.
 	local thread
 	thread = coro.create(function(...)
@@ -1768,14 +1768,8 @@ function M.newthread(handler, name)
 		if not ok then
 			error(err, 2)
 		end
-		if name then
-			coro.name(thread, false)
-		end
 		return transfer_to_poll_thread(...)
 	end)
-	if name then
-		coro.name(thread, name)
-	end
 	return thread
 end
 
