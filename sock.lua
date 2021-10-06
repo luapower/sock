@@ -514,6 +514,9 @@ do
 		[10013] = 'access_denied', --WSAEACCES
 		[10048] = 'address_already_in_use', --WSAEADDRINUSE
 		[10053] = 'connection_aborted', --WSAECONNABORTED
+		[10054] = 'connection_reset', --WSAECONNRESET
+		[10061] = 'connection_refused', --WSAECONNREFUSED
+		[ 1225] = 'connection_refused', --ERROR_CONNECTION_REFUSED
 		[  109] = 'eof', --ERROR_BROKEN_PIPE, ReadFile (masked)
 	}
 
@@ -961,11 +964,21 @@ ssize_t write(int fd, const void *buf, size_t count);
 ]]
 
 --error handling.
+
+local error_classes = {
+	[ 13] = 'access_denied', --EACCES
+	[ 98] = 'address_already_in_use', --EADDRINUSE
+	[103] = 'connection_aborted', --ECONNABORTED
+	[104] = 'connection_reset', --ECONNRESET
+	[111] = 'connection_refused', --ECONNREFUSED
+}
+
 ffi.cdef'char *strerror(int errnum);'
 function check(ret)
 	if ret then return ret end
 	local err = ffi.errno()
-	return ret, str(C.strerror(err))
+	local msg = error_classes[err]
+	return ret, msg or str(C.strerror(err))
 end
 
 local SOCK_NONBLOCK = Linux and tonumber(4000, 8)
