@@ -1271,7 +1271,7 @@ do
 			socket.recv_thread = nil
 		end
 		if has_err then
-			local err = socket:getopt'so_error'
+			local err = socket:getopt'error'
 			transfer(thread, nil, err or 'socket error')
 		else
 			transfer(thread, true)
@@ -1469,185 +1469,194 @@ local OPT, get_opt, set_opt
 if Windows then
 
 OPT = { --Windows 7 options only
-	so_acceptconn         = 0x0002, -- socket has had listen()
-	so_broadcast          = 0x0020, -- permit sending of broadcast msgs
-	so_bsp_state          = 0x1009, -- get socket 5-tuple state
-	so_conditional_accept = 0x3002, -- enable true conditional accept (see msdn)
-	so_connect_time       = 0x700C, -- number of seconds a socket has been connected
-	so_dontlinger         = bit.bnot(0x0080),
-	so_dontroute          = 0x0010, -- just use interface addresses
-	so_error              = 0x1007, -- get error status and clear
-	so_exclusiveaddruse   = bit.bnot(0x0004), -- disallow local address reuse
-	so_keepalive          = 0x0008, -- keep connections alive
-	so_linger             = 0x0080, -- linger on close if data present
-	so_max_msg_size       = 0x2003, -- maximum message size for UDP
-	so_maxdg              = 0x7009,
-	so_maxpathdg          = 0x700a,
-	so_oobinline          = 0x0100, -- leave received oob data in line
-	so_pause_accept       = 0x3003, -- pause accepting new connections
-	so_port_scalability   = 0x3006, -- enable port scalability
-	so_protocol_info      = 0x2005, -- wsaprotocol_infow structure
-	so_randomize_port     = 0x3005, -- randomize assignment of wildcard ports
-	so_rcvbuf             = 0x1002, -- receive buffer size
-	so_rcvlowat           = 0x1004, -- receive low-water mark
-	so_reuseaddr          = 0x0004, -- allow local address reuse
-	so_sndbuf             = 0x1001, -- send buffer size
-	so_sndlowat           = 0x1003, -- send low-water mark
-	so_type               = 0x1008, -- get socket type
-	so_update_accept_context  = 0x700b,
-	so_update_connect_context = 0x7010,
-	so_useloopback        = 0x0040, -- bypass hardware when possible
-	tcp_bsdurgent         = 0x7000,
-	tcp_expedited_1122  	 = 0x0002,
-	tcp_maxrt           	 =      5,
-	tcp_nodelay           = 0x0001,
-	tcp_timestamps      	 =     10,
+	acceptconn         = 0x0002, -- socket has had listen()
+	broadcast          = 0x0020, -- permit sending of broadcast msgs
+	bsp_state          = 0x1009, -- get socket 5-tuple state
+	conditional_accept = 0x3002, -- enable true conditional accept (see msdn)
+	connect_time       = 0x700C, -- number of seconds a socket has been connected
+	dontlinger         = bit.bnot(0x0080),
+	dontroute          = 0x0010, -- just use interface addresses
+	error              = 0x1007, -- get error status and clear
+	exclusiveaddruse   = bit.bnot(0x0004), -- disallow local address reuse
+	keepalive          = 0x0008, -- keep connections alive
+	linger             = 0x0080, -- linger on close if data present
+	max_msg_size       = 0x2003, -- maximum message size for UDP
+	maxdg              = 0x7009,
+	maxpathdg          = 0x700a,
+	oobinline          = 0x0100, -- leave received oob data in line
+	pause_accept       = 0x3003, -- pause accepting new connections
+	port_scalability   = 0x3006, -- enable port scalability
+	protocol_info      = 0x2005, -- wsaprotocol_infow structure
+	randomize_port     = 0x3005, -- randomize assignment of wildcard ports
+	rcvbuf             = 0x1002, -- receive buffer size
+	rcvlowat           = 0x1004, -- receive low-water mark
+	reuseaddr          = 0x0004, -- allow local address reuse
+	sndbuf             = 0x1001, -- send buffer size
+	sndlowat           = 0x1003, -- send low-water mark
+	type               = 0x1008, -- get socket type
+	update_accept_context  = 0x700b,
+	update_connect_context = 0x7010,
+	useloopback        = 0x0040, -- bypass hardware when possible
+	tcp_bsdurgent      = 0x7000,
+	tcp_expedited_1122 = 0x0002,
+	tcp_maxrt          =      5,
+	tcp_nodelay        = 0x0001,
+	tcp_timestamps     =     10,
 }
 
 get_opt = {
-	so_acceptconn         = get_bool,
-	so_broadcast          = get_bool,
-	so_bsp_state          = get_csaddr_info,
-	so_conditional_accept = get_bool,
-	so_connect_time       = get_uint,
-	so_dontlinger         = get_bool,
-	so_dontroute          = get_bool,
-	so_error              = get_uint,
-	so_exclusiveaddruse   = get_bool,
-	so_keepalive          = get_bool,
-	so_linger             = get_linger,
-	so_max_msg_size       = get_uint,
-	so_maxdg              = get_uint,
-	so_maxpathdg          = get_uint,
-	so_oobinline          = get_bool,
-	so_pause_accept       = get_bool,
-	so_port_scalability   = get_bool,
-	so_protocol_info      = get_protocol_info,
-	so_randomize_port     = get_uint16,
-	so_rcvbuf             = get_uint,
-	so_rcvlowat           = get_uint,
-	so_reuseaddr          = get_bool,
-	so_sndbuf             = get_uint,
-	so_sndlowat           = get_uint,
-	so_type               = get_uint,
-	tcp_bsdurgent         = get_bool,
-	tcp_expedited_1122  	 = get_bool,
-	tcp_maxrt           	 = get_uint,
-	tcp_nodelay           = get_bool,
-	tcp_timestamps      	 = get_bool,
+	acceptconn         = get_bool,
+	broadcast          = get_bool,
+	bsp_state          = get_csaddr_info,
+	conditional_accept = get_bool,
+	connect_time       = get_uint,
+	dontlinger         = get_bool,
+	dontroute          = get_bool,
+	error              = get_uint,
+	exclusiveaddruse   = get_bool,
+	keepalive          = get_bool,
+	linger             = get_linger,
+	max_msg_size       = get_uint,
+	maxdg              = get_uint,
+	maxpathdg          = get_uint,
+	oobinline          = get_bool,
+	pause_accept       = get_bool,
+	port_scalability   = get_bool,
+	protocol_info      = get_protocol_info,
+	randomize_port     = get_uint16,
+	rcvbuf             = get_uint,
+	rcvlowat           = get_uint,
+	reuseaddr          = get_bool,
+	sndbuf             = get_uint,
+	sndlowat           = get_uint,
+	type               = get_uint,
+	tcp_bsdurgent      = get_bool,
+	tcp_expedited_1122 = get_bool,
+	tcp_maxrt          = get_uint,
+	tcp_nodelay        = get_bool,
+	tcp_timestamps     = get_bool,
 }
 
 set_opt = {
-	so_broadcast          = set_bool,
-	so_conditional_accept = set_bool,
-	so_dontlinger         = set_bool,
-	so_dontroute          = set_bool,
-	so_exclusiveaddruse   = set_bool,
-	so_keepalive          = set_bool,
-	so_linger             = set_linger,
-	so_max_msg_size       = set_uint,
-	so_oobinline          = set_bool,
-	so_pause_accept       = set_bool,
-	so_port_scalability   = set_bool,
-	so_randomize_port     = set_uint16,
-	so_rcvbuf             = set_uint,
-	so_rcvlowat           = set_uint,
-	so_reuseaddr          = set_bool,
-	so_sndbuf             = set_uint,
-	so_sndlowat           = set_uint,
-	so_update_accept_context  = set_bool,
-	so_update_connect_context = set_bool,
-	tcp_bsdurgent         = set_bool,
-	tcp_expedited_1122  	 = set_bool,
-	tcp_maxrt           	 = set_uint,
-	tcp_nodelay           = set_bool,
-	tcp_timestamps      	 = set_bool,
+	broadcast          = set_bool,
+	conditional_accept = set_bool,
+	dontlinger         = set_bool,
+	dontroute          = set_bool,
+	exclusiveaddruse   = set_bool,
+	keepalive          = set_bool,
+	linger             = set_linger,
+	max_msg_size       = set_uint,
+	oobinline          = set_bool,
+	pause_accept       = set_bool,
+	port_scalability   = set_bool,
+	randomize_port     = set_uint16,
+	rcvbuf             = set_uint,
+	rcvlowat           = set_uint,
+	reuseaddr          = set_bool,
+	sndbuf             = set_uint,
+	sndlowat           = set_uint,
+	update_accept_context  = set_bool,
+	update_connect_context = set_bool,
+	tcp_bsdurgent      = set_bool,
+	tcp_expedited_1122 = set_bool,
+	tcp_maxrt          = set_uint,
+	tcp_nodelay        = set_bool,
+	tcp_timestamps     = set_bool,
 }
 
 elseif Linux then
 
 OPT = {
-	so_debug             = 1,
-	so_reuseaddr         = 2,
-	so_type              = 3,
-	so_error             = 4,
-	so_dontroute         = 5,
-	so_broadcast         = 6,
-	so_sndbuf            = 7,
-	so_rcvbuf            = 8,
-	so_sndbufforce       = 32,
-	so_rcvbufforce       = 33,
-	so_keepalive         = 9,
-	so_oobinline         = 10,
-	so_no_check          = 11,
-	so_priority          = 12,
-	so_linger            = 13,
-	so_bsdcompat         = 14,
-	so_reuseport         = 15,
-	so_passcred          = 16,
-	so_peercred          = 17,
-	so_rcvlowat          = 18,
-	so_sndlowat          = 19,
-	so_rcvtimeo          = 20,
-	so_sndtimeo          = 21,
-	so_security_authentication = 22,
-	so_security_encryption_transport = 23,
-	so_security_encryption_network = 24,
-	so_bindtodevice      = 25,
-	so_attach_filter     = 26,
-	so_detach_filter     = 27,
-	so_get_filter        = 26, --so_attach_filter
-	so_peername          = 28,
-	so_timestamp         = 29,
-	scm_timestamp        = 29, --so_timestamp
-	so_acceptconn        = 30,
-	so_peersec           = 31,
-	so_passsec           = 34,
-	so_timestampns       = 35,
-	scm_timestampns      = 35, --so_timestampns
-	so_mark              = 36,
-	so_timestamping      = 37,
-	scm_timestamping     = 37, --so_timestamping
-	so_protocol          = 38,
-	so_domain            = 39,
-	so_rxq_ovfl          = 40,
-	so_wifi_status       = 41,
-	scm_wifi_status      = 41, --so_wifi_status
-	so_peek_off          = 42,
-	so_nofcs             = 43,
-	so_lock_filter       = 44,
-	so_select_err_queue  = 45,
-	so_busy_poll         = 46,
-	so_max_pacing_rate   = 47,
-	so_bpf_extensions    = 48,
-	so_incoming_cpu      = 49,
-	so_attach_bpf        = 50,
-	so_detach_bpf        = 27, --so_detach_filter
-	so_attach_reuseport_cbpf = 51,
-	so_attach_reuseport_ebpf = 52,
-	so_cnx_advice        = 53,
+	debug             = 1,
+	reuseaddr         = 2,
+	type              = 3,
+	error             = 4,
+	dontroute         = 5,
+	broadcast         = 6,
+	sndbuf            = 7,
+	rcvbuf            = 8,
+	sndbufforce       = 32,
+	rcvbufforce       = 33,
+	keepalive         = 9,
+	oobinline         = 10,
+	no_check          = 11,
+	priority          = 12,
+	linger            = 13,
+	bsdcompat         = 14,
+	reuseport         = 15,
+	passcred          = 16,
+	peercred          = 17,
+	rcvlowat          = 18,
+	sndlowat          = 19,
+	rcvtimeo          = 20,
+	sndtimeo          = 21,
+	security_authentication = 22,
+	security_encryption_transport = 23,
+	security_encryption_network = 24,
+	bindtodevice      = 25,
+	attach_filter     = 26,
+	detach_filter     = 27,
+	get_filter        = 26, --attach_filter
+	peername          = 28,
+	timestamp         = 29,
+	scm_timestamp        = 29, --timestamp
+	acceptconn        = 30,
+	peersec           = 31,
+	passsec           = 34,
+	timestampns       = 35,
+	scm_timestampns      = 35, --timestampns
+	mark              = 36,
+	timestamping      = 37,
+	scm_timestamping     = 37, --timestamping
+	protocol          = 38,
+	domain            = 39,
+	rxq_ovfl          = 40,
+	wifi_status       = 41,
+	scm_wifi_status      = 41, --wifi_status
+	peek_off          = 42,
+	nofcs             = 43,
+	lock_filter       = 44,
+	select_err_queue  = 45,
+	busy_poll         = 46,
+	max_pacing_rate   = 47,
+	bpf_extensions    = 48,
+	incoming_cpu      = 49,
+	attach_bpf        = 50,
+	detach_bpf        = 27, --detach_filter
+	attach_reuseport_cbpf = 51,
+	attach_reuseport_ebpf = 52,
+	cnx_advice        = 53,
 	scm_timestamping_opt_stats = 54,
-	so_meminfo           = 55,
-	so_incoming_napi_id  = 56,
-	so_cookie            = 57,
+	meminfo           = 55,
+	incoming_napi_id  = 56,
+	cookie            = 57,
 	scm_timestamping_pktinfo = 58,
-	so_peergroups        = 59,
-	so_zerocopy          = 60,
+	peergroups        = 59,
+	zerocopy          = 60,
 }
 
 get_opt = {
-	so_error = get_str,
+	error              = get_str,
+	reuseaddr          = get_bool,
 }
 
 set_opt = {
-	--TODO
+	reuseaddr          = set_bool,
 }
 
 elseif OSX then --TODO
 
-OPT = {}
-get_opt = {}
-set_opt = {}
+OPT = {
+
+}
+
+get_opt = {
+
+}
+
+set_opt = {
+
+}
 
 end
 
