@@ -43,7 +43,6 @@ end
 
 local currentthread = coro.running
 local transfer = coro.transfer
-local transfer_to_poll_thread --fw. decl.
 
 --getaddrinfo() --------------------------------------------------------------
 
@@ -649,6 +648,10 @@ local expires_heap = heap.valueheap{
 function M.sleep_until(t)
 	expires_heap:push({expires = t, thread = currentthread()})
 	wait()
+end
+
+function M.sleep(s)
+	M.sleep_until(clock() + s)
 end
 
 local overlapped, free_overlapped
@@ -1752,9 +1755,6 @@ local function restore(...)
 	M.restore_thread_context(currentthread())
 	return ...
 end
---[[local]] function transfer_to_poll_thread(...)
-	return restore(transfer(poll_thread, ...))
-end
 
 local wait_count = 0
 local waiting = setmetatable({}, {__mode = 'k'}) --{thread -> true}
@@ -1770,7 +1770,7 @@ end
 	assert(thread ~= poll_thread, 'trying to I/O from the main thread')
 	wait_count = wait_count + 1
 	waiting[thread] = true
-	return pass(thread, transfer_to_poll_thread())
+	return pass(thread, restore(transfer(poll_thread)))
 end
 end
 
@@ -1790,7 +1790,7 @@ function M.newthread(handler)
 		if not ok then
 			error(err, 2)
 		end
-		return transfer_to_poll_thread(...)
+		return restore(transfer(poll_thread, ...))
 	end)
 	return thread
 end
@@ -1802,12 +1802,13 @@ function M.cosafewrap(f)
 	end)
 end
 
-function M.suspend(...)
-	return transfer_to_poll_thread(...)
+function M.transfer(thread, ...)
+	assert(not waiting[thread], 'attempt to resume a thread that is waiting on I/O')
+	return restore(transfer(thread, ...))
 end
 
-function M.sleep(s)
-	return M.sleep_until(clock() + s)
+function M.suspend(...)
+	return restore(transfer(poll_thread, ...))
 end
 
 local function resume_pass(real_poll_thread, ...)
@@ -1824,11 +1825,6 @@ end
 
 function M.thread(...)
 	return M.resume(M.newthread(...))
-end
-
-function M.transfer(thread, ...)
-	assert(not waiting[thread], 'attempt to resume a thread that is waiting on I/O')
-	return transfer(thread, ...)
 end
 
 M.currentthread = currentthread
