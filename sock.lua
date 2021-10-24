@@ -529,7 +529,7 @@ do
 				FORMAT_MESSAGE_FROM_SYSTEM, nil, err, 0, buf, bufsz, nil)
 			msg = sz > 0 and ffi.string(buf, sz):gsub('[\r\n]+$', '') or 'Error '..err
 		end
-		return nil, msg
+		return ret, msg
 	end
 end
 
@@ -1823,8 +1823,8 @@ function M.resume(thread, ...)
 	return resume_pass(real_poll_thread, M.transfer(thread, ...))
 end
 
-function M.thread(...)
-	return M.resume(M.newthread(...))
+function M.thread(f, ...)
+	return M.resume(M.newthread(f), ...)
 end
 
 M.currentthread = currentthread
