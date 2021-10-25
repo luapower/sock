@@ -167,6 +167,25 @@ local function test_http()
 
 end
 
+local function test_timers()
+
+	sock.run(function()
+		local i = 1
+		local job = sock.runevery(.1, function()
+			print(i); i = i + 1
+		end)
+		sock.runafter(1, function()
+			print'canceling'
+			job:cancel()
+			print'done'
+		end)
+	end)
+
+	os.exit()
+end
+
+test_timers()
+
 --test_addr()
 --test_sockopt()
 --test_http()

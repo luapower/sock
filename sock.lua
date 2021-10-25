@@ -650,16 +650,16 @@ local function sleep_until(job, expires)
 	job.thread = currentthread()
 	job.expires = expires
 	expires_heap:push(job)
-	wait()
+	return wait(false)
 end
 local function sleep(job, timeout)
 	return sleep_until(job, clock() + timeout)
 end
-local function wakeup(job)
+local function wakeup(job, ...)
 	if not expires_heap:remove(job) then
 		return false
 	end
-	M.resume(job.thread)
+	M.resume(job.thread, ...)
 	return true
 end
 function M.sleep_job()
@@ -1042,16 +1042,16 @@ local function sleep(job, expires)
 	job.recv_thread = currentthread()
 	job.recv_expires = expires
 	recv_expires_heap:push(job)
-	wait()
+	return wait(false)
 end
 local function sleep(job, timeout)
 	return sleep_until(job, clock() + timeout)
 end
-local function wakeup(thread)
+local function wakeup(thread, ...)
 	if not recv_expires_heap:remove(job) then
 		return false
 	end
-	M.resume(job.thread)
+	M.resume(job.thread, ...)
 	return true
 end
 function M.sleep_job()
@@ -1760,6 +1760,53 @@ function tcp:recvn(buf, sz, expires)
 	return true
 end
 
+--sleeping & timers ----------------------------------------------------------
+
+function M.sleep_until(expires)
+	M.sleep_job():sleep_until(expires)
+end
+
+function M.sleep(timeout)
+	M.sleep_job():sleep(timeout)
+end
+
+local CANCEL = function() end
+local function cancel_sleep(job)
+	job:wakeup(CANCEL)
+end
+
+function M.runat(t, f)
+	local job = M.sleep_job()
+	job.cancel = cancel_sleep
+	M.thread(function()
+		if job:sleep_until(t) == CANCEL then
+			return
+		end
+		f()
+	end)
+	return job
+end
+
+function M.runafter(timeout, f)
+	return M.runat(clock() + timeout, f)
+end
+
+function M.runevery(interval, f)
+	local job = M.sleep_job()
+	job.cancel = cancel_sleep
+	M.thread(function()
+		while true do
+			if job:sleep(interval) == CANCEL then
+				return
+			end
+			if f() == false then
+				return
+			end
+		end
+	end)
+	return job
+end
+
 --hi-level APIs --------------------------------------------------------------
 
 --[[local]] function wrap_socket(class, s, st, af, pr)
@@ -1773,14 +1820,6 @@ function M.raw(...) return create_socket(raw, 'raw', ...) end
 glue.update(tcp, socket)
 glue.update(udp, socket)
 glue.update(raw, socket)
-
-function M.sleep_until(expires)
-	M.sleep_job():sleep_until(expires)
-end
-
-function M.sleep(timeout)
-	M.sleep_job():sleep(timeout)
-end
 
 --coroutine-based scheduler --------------------------------------------------
 
@@ -1803,11 +1842,13 @@ local function pass(thread, ...)
 	waiting[thread] = nil
 	return ...
 end
---[[local]] function wait()
+--[[local]] function wait(register)
 	local thread = currentthread()
 	assert(thread ~= poll_thread, 'trying to I/O from the main thread')
 	wait_count = wait_count + 1
-	waiting[thread] = true
+	if register ~= false then
+		waiting[thread] = true
+	end
 	return pass(thread, restore(transfer(poll_thread)))
 end
 end
