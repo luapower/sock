@@ -68,8 +68,12 @@ __scheduling__
 `sock.start()`                                                   keep polling until all threads finish
 `sock.stop()`                                                    stop polling
 `sock.run(f, ...) -> ...`                                        run a function with I/O
-`sock.sleep_until(t)`                                            sleep without blocking until time.clock() value
+`sock.sleep_until(t)`                                            sleep without blocking until sock.clock() value
 `sock.sleep(s)`                                                  sleep without blocking for s seconds
+`sock.sleep_job() -> sj`                                         make an interruptible sleep job
+`sj:sleep_until(t)`                                              sleep until sock.clock()
+`sj:sleep(s)`                                                    sleep for `s` seconds
+`sj:wakeup()`                                                    wake up the sleeping thread
 __multi-threading__
 `sock.iocp([iocp_h]) -> iocp_h`                                  get/set IOCP handle (Windows)
 `sock.epoll_fd([epfd]) -> epfd`                                  get/set epoll fd (Linux)
@@ -265,6 +269,12 @@ Sleep until a time.clock() value without blocking other threads.
 ### `sock.sleep(s)`
 
 Sleep `s` seconds without blocking other threads.
+
+### `sock.sleep_job() -> sj`
+
+Make an interruptible sleeping job. Put the current thread sleep using
+`sj:sleep()` or `sj:sleep_until()` and then from another thread call
+`sj:wakeup()` to resume the sleeping thread.
 
 ## Multi-threading
 

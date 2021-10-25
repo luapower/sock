@@ -645,13 +645,26 @@ local expires_heap = heap.valueheap{
 	index_key = 'index', --enable O(log n) removal.
 }
 
-function M.sleep_until(t)
-	expires_heap:push({expires = t, thread = currentthread()})
+do
+local function sleep_until(job, expires)
+	job.thread = currentthread()
+	job.expires = expires
+	expires_heap:push(job)
 	wait()
 end
-
-function M.sleep(s)
-	M.sleep_until(clock() + s)
+local function sleep(job, timeout)
+	return sleep_until(job, clock() + timeout)
+end
+local function wakeup(job)
+	if not expires_heap:remove(job) then
+		return false
+	end
+	M.resume(job.thread)
+	return true
+end
+function M.sleep_job()
+	return {sleep = sleep, sleep_until = sleep_until, wakeup = wakeup}
+end
 end
 
 local overlapped, free_overlapped
@@ -1024,9 +1037,26 @@ local send_expires_heap = heap.valueheap{
 	index_key = 'index', --enable O(log n) removal.
 }
 
-function M.sleep_until(t)
-	recv_expires_heap:push({recv_expires = t, recv_thread = currentthread()})
+do
+local function sleep(job, expires)
+	job.recv_thread = currentthread()
+	job.recv_expires = expires
+	recv_expires_heap:push(job)
 	wait()
+end
+local function sleep(job, timeout)
+	return sleep_until(job, clock() + timeout)
+end
+local function wakeup(thread)
+	if not recv_expires_heap:remove(job) then
+		return false
+	end
+	M.resume(job.thread)
+	return true
+end
+function M.sleep_job()
+	return {sleep = sleep, sleep_until = sleep_until, wakeup = wakeup}
+end
 end
 
 local function make_async(for_writing, func, wait_errno)
@@ -1283,7 +1313,7 @@ do
 
 	local function check_heap(heap, EXPIRES, THREAD, t)
 		while true do
-			local socket = heap:peek()
+			local socket = heap:peek() --gets a socket or sleep job
 			if not socket then
 				break
 			end
@@ -1730,7 +1760,7 @@ function tcp:recvn(buf, sz, expires)
 	return true
 end
 
---hi-level API ---------------------------------------------------------------
+--hi-level APIs --------------------------------------------------------------
 
 --[[local]] function wrap_socket(class, s, st, af, pr)
 	local s = {s = s, __index = class, _st = st, _af = af, _pr = pr}
@@ -1743,6 +1773,14 @@ function M.raw(...) return create_socket(raw, 'raw', ...) end
 glue.update(tcp, socket)
 glue.update(udp, socket)
 glue.update(raw, socket)
+
+function M.sleep_until(expires)
+	M.sleep_job():sleep_until(expires)
+end
+
+function M.sleep(timeout)
+	M.sleep_job():sleep(timeout)
+end
 
 --coroutine-based scheduler --------------------------------------------------
 
