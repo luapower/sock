@@ -64,6 +64,8 @@ __scheduling__
 `sock.cosafewrap(f) -> wrapper`                                  see coro.safewrap()
 `sock.currentthread() -> co`                                     see coro.running()
 `sock.transfer(co, ...) -> ...`                                  see coro.transfer()
+`sock.onthreadfinish(co, f)`                                     run `f` when thread finishes
+`sock.threadenv[thread] <-> env`                                 get/set thread environment
 `sock.poll()`                                                    poll for I/O
 `sock.start()`                                                   keep polling until all threads finish
 `sock.stop()`                                                    stop polling

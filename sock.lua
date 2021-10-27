@@ -1860,16 +1860,33 @@ function M.poll()
 	return poll()
 end
 
-function M.newthread(handler)
-	--wrap handler so that it terminates in current poll_thread.
+local threadenv = setmetatable({}, {__mode = 'k'})
+M.threadenv = threadenv
+--^^ making this weak allows unfinished threads to get collected.
+
+function M.onthreadfinish(thread, f)
+	local env = glue.attr(threadenv, thread)
+	glue.after(env, '__finish', f)
+end
+
+function M.newthread(f)
+	--wrap f so that it terminates in current poll_thread.
 	local thread
 	thread = coro.create(function(...)
 		M.save_thread_context(thread)
-		local ok, err = glue.pcall(handler, ...) --last chance to get stacktrace.
+		local ok, err = glue.pcall(f, ...) --last chance to get stacktrace.
+		local env = threadenv[thread]
+		if env then
+			threadenv[thread] = nil
+			local finish = env.__finish
+			if finish then
+				finish(thread)
+			end
+		end
 		if not ok then
 			error(err, 2)
 		end
-		return restore(transfer(poll_thread, ...))
+		return transfer(poll_thread)
 	end)
 	return thread
 end
