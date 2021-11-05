@@ -1038,7 +1038,7 @@ local send_expires_heap = heap.valueheap{
 }
 
 do
-local function sleep(job, expires)
+local function sleep_until(job, expires)
 	job.recv_thread = currentthread()
 	job.recv_expires = expires
 	recv_expires_heap:push(job)
