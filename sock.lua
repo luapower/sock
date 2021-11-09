@@ -1751,8 +1751,10 @@ function tcp:recvn(buf, sz, expires)
 	local sz0 = sz
 	while sz > 0 do
 		local len, err = self:recv(buf, sz, expires)
-		if not len or len == 0 then --short read
+		if not len then --short read
 			return nil, err, sz0 - sz
+		elseif len == 0 then --closed
+			return nil, 'eof', sz0 - sz
 		end
 		buf = buf + len
 		sz  = sz  - len
