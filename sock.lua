@@ -1926,6 +1926,7 @@ function M.thread(f, ...)
 end
 
 M.currentthread = currentthread
+M.yield = coro.yield
 
 local stop = false
 local running = false
