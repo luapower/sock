@@ -62,7 +62,7 @@ __scheduling__
 `sock.yield(...) -> ...`                                         safe yield (see [coro])
 `sock.suspend(...) -> ...`                                       suspend thread
 `sock.thread(func, ...) -> co`                                   create thread and resume
-`sock.cosafewrap(f) -> wrapper`                                  see coro.safewrap()
+`sock.cowrap(f) -> wrapper`                                      see coro.safewrap()
 `sock.currentthread() -> co`                                     see coro.running()
 `sock.transfer(co, ...) -> ...`                                  see coro.transfer()
 `sock.onthreadfinish(co, f)`                                     run `f` when thread finishes

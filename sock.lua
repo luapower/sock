@@ -1893,7 +1893,7 @@ function M.newthread(f)
 	return thread
 end
 
-function M.cosafewrap(f)
+function M.cowrap(f)
 	return coro.safewrap(function(...)
 		M.save_thread_context(currentthread())
 		return f(...)
