@@ -88,7 +88,7 @@ __multi-threading__
 All function return `nil, err` on error (but raise on user error
 or unrecoverable OS failure). Some error messages are normalized
 across platforms, like 'access_denied' and 'address_already_in_use'
-so they can be used as conditionals.
+so they can be used in conditionals.
 
 I/O functions only work inside threads created with `sock.newthread()`.
 
