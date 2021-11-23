@@ -1748,7 +1748,7 @@ function tcp:send(buf, sz, expires)
 end
 
 function tcp:recvn(buf, sz, expires)
-	local sz0 = sz
+	local buf0, sz0 = buf, sz
 	while sz > 0 do
 		local len, err = self:recv(buf, sz, expires)
 		if not len then --short read
@@ -1759,7 +1759,7 @@ function tcp:recvn(buf, sz, expires)
 		buf = buf + len
 		sz  = sz  - len
 	end
-	return true
+	return buf0, sz0
 end
 
 --sleeping & timers ----------------------------------------------------------

@@ -52,7 +52,7 @@ __sockets__
 `tcp|udp:recv(buf, maxlen, [expires]) -> len`                    receive bytes
 `tcp:listen([backlog, ]host, port, [af])`                        put socket in listening mode
 `tcp:accept([expires]) -> ctcp`                                  accept a client connection
-`tcp:recvn(buf, len, [expires]) -> true`                         receive n bytes
+`tcp:recvn(buf, len, [expires]) -> buf, len`                     receive n bytes
 `udp:sendto(host, port, s|buf, [len], [expires], [af]) -> len`   send a datagram to an address
 `udp:recvnext(buf, maxlen, [expires], [flags]) -> len, sa`       receive the next datagram
 `tcp:shutdown('r'|'w'|'rw', [expires])`                          send FIN
@@ -191,7 +191,7 @@ to `1/0` which means "use the maximum allowed".
 Accept a client connection. The connection socket has additional fields:
 `remote_addr`, `remote_port`, `local_addr`, `local_port`.
 
-### `tcp:recvn(buf, len, [expires]) -> true`
+### `tcp:recvn(buf, len, [expires]) -> buf, len`
 
 Repeat recv until `len` bytes are received.
 Partial reads are signaled with `nil, err, readlen`.
