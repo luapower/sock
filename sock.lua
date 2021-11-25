@@ -1845,8 +1845,8 @@ local function pass(thread, ...)
 	return ...
 end
 --[[local]] function wait(register)
-	local thread = currentthread()
-	assert(thread ~= poll_thread, 'trying to I/O from the main thread')
+	local thread, is_main = currentthread()
+	assert(not is_main, 'trying to perform I/O from the main thread')
 	wait_count = wait_count + 1
 	if register ~= false then
 		waiting[thread] = true
