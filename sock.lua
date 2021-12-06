@@ -804,21 +804,13 @@ end
 do
 	local WSA_IO_PENDING = 997 --alias to ERROR_IO_PENDING
 
-	local function check_timeout(job, ...)
-		local ret, err = ...
-		if ret == nil and err == 'timeout' then
-			job.socket:close() --socket or pipe, close it.
-		end
-		return ...
-	end
-
 	local function check_pending(ok, job)
 		if ok or C.WSAGetLastError() == WSA_IO_PENDING then
 			if job.expires then
 				expires_heap:push(job)
 			end
 			job.thread = currentthread()
-			return check_timeout(job, wait())
+			return wait()
 		end
 		return check()
 	end
@@ -1080,9 +1072,6 @@ local function make_async(for_writing, func, wait_errno)
 			end
 			local ok, err = wait()
 			if not ok then
-				if err == 'timeout' then
-					self:close()
-				end
 				return nil, err
 			end
 			goto again

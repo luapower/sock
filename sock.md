@@ -95,8 +95,7 @@ I/O functions only work inside threads created with `sock.newthread()`.
 
 The optional `expires` arg controls the timeout of the operation and must be
 a `sock.clock()`-relative value (which is in seconds). If the expiration clock
-is reached before the operation completes the socket is forcibly closed
-and `nil, 'timeout'` is returned.
+is reached before the operation completes, `nil, 'timeout'` is returned.
 
 `host, port` args are passed to `sock.addr()` (with the optional `af` arg),
 which means that an already resolved address can be passed as `ai, nil`
