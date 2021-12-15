@@ -3,6 +3,8 @@
 
 Secure async TCP sockets with [sock] and [libtls].
 
+<warn>WIP</warn>
+
 ## API
 
 ----------------------------------------------------- -----------------------------------
