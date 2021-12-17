@@ -507,8 +507,6 @@ do
 
 	local FORMAT_MESSAGE_FROM_SYSTEM = 0x00001000
 
-	local errbuf = glue.buffer'char[?]'
-
 	local error_classes = {
 		[10013] = 'access_denied', --WSAEACCES
 		[10048] = 'address_already_in_use', --WSAEADDRINUSE
@@ -519,14 +517,15 @@ do
 		[  109] = 'eof', --ERROR_BROKEN_PIPE, ReadFile (masked)
 	}
 
+	local buf
 	function check(ret, err)
 		if ret then return ret end
 		local err = err or C.WSAGetLastError()
 		local msg = error_classes[err]
 		if not msg then
-			local buf, bufsz = errbuf(256)
+			buf = buf or ffi.new('char[?]', 256)
 			local sz = ffi.C.FormatMessageA(
-				FORMAT_MESSAGE_FROM_SYSTEM, nil, err, 0, buf, bufsz, nil)
+				FORMAT_MESSAGE_FROM_SYSTEM, nil, err, 0, buf, 256, nil)
 			msg = sz > 0 and ffi.string(buf, sz):gsub('[\r\n]+$', '') or 'Error '..err
 		end
 		return ret, msg
