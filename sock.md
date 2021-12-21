@@ -13,7 +13,7 @@ multi-threading support).
 
 ## Status
 
-<warn>Alpha (Windows & Linux)</warn>
+<warn>Windows & Linux only.</warn>
 
 ## API
 
