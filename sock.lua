@@ -1754,6 +1754,10 @@ function tcp:recvall(expires)
 	return glue.readall(self.recv, self, expires)
 end
 
+function tcp:recvall_read(expires)
+	return glue.buffer_reader(self:recvall(expires))
+end
+
 --sleeping & timers ----------------------------------------------------------
 
 function M.sleep_until(expires)
