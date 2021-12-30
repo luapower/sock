@@ -1750,6 +1750,10 @@ function tcp:recvn(buf, sz, expires)
 	return buf0, sz0
 end
 
+function tcp:recvall(expires)
+	return glue.readall(self.recv, self, expires)
+end
+
 --sleeping & timers ----------------------------------------------------------
 
 function M.sleep_until(expires)
