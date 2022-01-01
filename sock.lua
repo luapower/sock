@@ -1819,6 +1819,10 @@ glue.update(tcp, socket)
 glue.update(udp, socket)
 glue.update(raw, socket)
 
+M.udp_class = udp
+M.tcp_class = tcp
+M.raw_class = raw
+
 --coroutine-based scheduler --------------------------------------------------
 
 M.save_thread_context    = glue.noop --stub
